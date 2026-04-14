@@ -1,14 +1,56 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
+const TOKEN_KEY = 'orchestrix_token'
+const USER_KEY = 'orchestrix_user'
+
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY)
+}
+
+export function setToken(token) {
+  localStorage.setItem(TOKEN_KEY, token)
+}
+
+export function removeToken() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+
+export function getUser() {
+  const userStr = localStorage.getItem(USER_KEY)
+  return userStr ? JSON.parse(userStr) : null
+}
+
+export function setUser(user) {
+  localStorage.setItem(USER_KEY, JSON.stringify(user))
+}
+
+export function isAuthenticated() {
+  return !!getToken()
+}
+
 async function fetchJSON(url, options = {}) {
+  const token = getToken()
+  
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers
+  }
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+  
   const response = await fetch(`${API_BASE}${url}`, {
     ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers
-    }
+    headers
   })
+  
   if (!response.ok) {
+    if (response.status === 401) {
+      removeToken()
+      window.dispatchEvent(new CustomEvent('auth:logout'))
+    }
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
     throw new Error(error.detail || `HTTP ${response.status}`)
   }
@@ -17,6 +59,38 @@ async function fetchJSON(url, options = {}) {
 
 export const api = {
   health: () => fetchJSON('/health'),
+
+  register: async (email, username, password, confirmPassword) => {
+    const data = await fetchJSON('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, username, password, confirm_password: confirmPassword })
+    })
+    setToken(data.access_token)
+    setUser(data.user)
+    return data
+  },
+
+  login: async (email, password) => {
+    const data = await fetchJSON('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password })
+    })
+    setToken(data.access_token)
+    setUser(data.user)
+    return data
+  },
+
+  logout: () => {
+    removeToken()
+    window.dispatchEvent(new CustomEvent('auth:logout'))
+  },
+
+  getCurrentUser: () => fetchJSON('/auth/me'),
+
+  updateProfile: (data) => fetchJSON('/auth/me', {
+    method: 'PATCH',
+    body: JSON.stringify(data)
+  }),
 
   createSession: (name, query) => 
     fetchJSON('/sessions', {
@@ -43,9 +117,15 @@ export const api = {
       body: JSON.stringify(paperIds)
     }),
 
-  exportBib: (sessionId) => `${API_BASE}/sessions/${sessionId}/export/bib`,
+  exportBib: (sessionId) => {
+    const token = getToken()
+    return `${API_BASE}/sessions/${sessionId}/export/bib${token ? `?token=${token}` : ''}`
+  },
 
-  exportTxt: (sessionId) => `${API_BASE}/sessions/${sessionId}/export/txt`,
+  exportTxt: (sessionId) => {
+    const token = getToken()
+    return `${API_BASE}/sessions/${sessionId}/export/txt${token ? `?token=${token}` : ''}`
+  },
 
   getConflicts: (sessionId) => fetchJSON(`/sessions/${sessionId}/conflicts`),
 

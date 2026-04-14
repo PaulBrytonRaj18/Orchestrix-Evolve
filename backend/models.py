@@ -29,10 +29,33 @@ class DigestFrequency(enum.Enum):
     MONTHLY = "monthly"
 
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    email = Column(String, unique=True, nullable=False, index=True)
+    username = Column(String, unique=True, nullable=False, index=True)
+    hashed_password = Column(String, nullable=False)
+    is_active = Column(Boolean, default=True)
+    is_admin = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    sessions = relationship(
+        "Session", back_populates="user", cascade="all, delete-orphan"
+    )
+    digests = relationship(
+        "ScheduledDigest", back_populates="user", cascade="all, delete-orphan"
+    )
+
+
 class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
     name = Column(String, nullable=False)
     query = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -40,6 +63,7 @@ class Session(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    user = relationship("User", back_populates="sessions")
     papers = relationship(
         "Paper", back_populates="session", cascade="all, delete-orphan"
     )
@@ -192,6 +216,7 @@ class ScheduledDigest(Base):
     __tablename__ = "scheduled_digests"
 
     id = Column(String, primary_key=True, default=generate_uuid)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True)
     name = Column(String, nullable=False)
     query = Column(String, nullable=False)
     frequency = Column(String, nullable=False, default="weekly")
@@ -204,6 +229,7 @@ class ScheduledDigest(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    user = relationship("User", back_populates="digests")
     runs = relationship(
         "DigestRun", back_populates="scheduled_digest", cascade="all, delete-orphan"
     )

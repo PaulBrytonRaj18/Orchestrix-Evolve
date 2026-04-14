@@ -1,6 +1,45 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from typing import Optional, List, Any
 from datetime import datetime
+
+
+class UserBase(BaseModel):
+    email: EmailStr
+    username: str = Field(..., min_length=3, max_length=50)
+
+
+class UserCreate(UserBase):
+    password: str = Field(..., min_length=8)
+    confirm_password: str
+
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    username: str
+    is_active: bool
+    is_admin: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserUpdate(BaseModel):
+    email: Optional[EmailStr] = None
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
+    password: Optional[str] = Field(None, min_length=8)
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
 
 
 class SessionCreate(BaseModel):
@@ -10,6 +49,7 @@ class SessionCreate(BaseModel):
 
 class SessionResponse(BaseModel):
     id: str
+    user_id: Optional[str] = None
     name: str
     query: str
     created_at: datetime
@@ -190,6 +230,7 @@ class ScheduledDigestWithRuns(ScheduledDigestResponse):
 
 class SessionFullResponse(BaseModel):
     id: str
+    user_id: Optional[str] = None
     name: str
     query: str
     created_at: datetime

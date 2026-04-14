@@ -1,17 +1,19 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-from database import get_db, init_db
+from database import get_db, init_db, close_engine, is_postgres
 from models import (
+    User,
     Session as SessionModel,
     Paper,
     Analysis,
@@ -25,6 +27,11 @@ from models import (
     Roadmap,
 )
 from schemas import (
+    UserCreate,
+    UserLogin,
+    UserResponse,
+    UserUpdate,
+    TokenResponse,
     SessionCreate,
     SessionResponse,
     SessionFullResponse,
@@ -46,6 +53,13 @@ from schemas import (
     ScheduledDigestWithRuns,
     ConflictDetectionResult,
     RoadmapResponse,
+)
+from auth import (
+    get_password_hash,
+    verify_password,
+    create_access_token,
+    get_current_user,
+    get_current_user_optional,
 )
 from orchestrator import orchestrate
 from agents import summarizer, conflict_detector, digest_scheduler, roadmap
@@ -75,12 +89,17 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     init_db()
+    if is_postgres():
+        logger.info("Using PostgreSQL database")
+    else:
+        logger.info("Using SQLite database")
     scheduler.start()
 
 
 @app.on_event("shutdown")
 def shutdown():
     scheduler.stop()
+    close_engine()
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -88,14 +107,172 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.post(
+    "/auth/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED
+)
+def register(user_data: UserCreate, db: Session = Depends(get_db)):
+    if user_data.password != user_data.confirm_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Passwords do not match"
+        )
+
+    existing_user = (
+        db.query(User)
+        .filter(or_(User.email == user_data.email, User.username == user_data.username))
+        .first()
+    )
+
+    if existing_user:
+        if existing_user.email == user_data.email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken"
+        )
+
+    db_user = User(
+        email=user_data.email,
+        username=user_data.username,
+        hashed_password=get_password_hash(user_data.password),
+    )
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+
+    access_token = create_access_token(data={"sub": db_user.id})
+
+    return TokenResponse(
+        access_token=access_token,
+        user=UserResponse(
+            id=db_user.id,
+            email=db_user.email,
+            username=db_user.username,
+            is_active=db_user.is_active,
+            is_admin=db_user.is_admin,
+            created_at=db_user.created_at,
+        ),
+    )
+
+
+@app.post("/auth/login", response_model=TokenResponse)
+def login(credentials: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == credentials.email).first()
+
+    if not user or not verify_password(credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    if not user.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Account is disabled"
+        )
+
+    access_token = create_access_token(data={"sub": user.id})
+
+    return TokenResponse(
+        access_token=access_token,
+        user=UserResponse(
+            id=user.id,
+            email=user.email,
+            username=user.username,
+            is_active=user.is_active,
+            is_admin=user.is_admin,
+            created_at=user.created_at,
+        ),
+    )
+
+
+@app.get("/auth/me", response_model=UserResponse)
+def get_current_user_info(
+    current_user_id: str = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    user = db.query(User).filter(User.id == current_user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        is_active=user.is_active,
+        is_admin=user.is_admin,
+        created_at=user.created_at,
+    )
+
+
+@app.patch("/auth/me", response_model=UserResponse)
+def update_current_user(
+    user_update: UserUpdate,
+    current_user_id: str = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(User).filter(User.id == current_user_id).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
+        )
+
+    if user_update.email:
+        existing = (
+            db.query(User)
+            .filter(User.email == user_update.email, User.id != current_user_id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Email already in use"
+            )
+        user.email = user_update.email
+
+    if user_update.username:
+        existing = (
+            db.query(User)
+            .filter(User.username == user_update.username, User.id != current_user_id)
+            .first()
+        )
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail="Username already taken"
+            )
+        user.username = user_update.username
+
+    if user_update.password:
+        user.hashed_password = get_password_hash(user_update.password)
+
+    db.commit()
+    db.refresh(user)
+
+    return UserResponse(
+        id=user.id,
+        email=user.email,
+        username=user.username,
+        is_active=user.is_active,
+        is_admin=user.is_admin,
+        created_at=user.created_at,
+    )
+
+
 @app.post("/sessions", response_model=SessionResponse)
-def create_session(session: SessionCreate, db: Session = Depends(get_db)):
-    db_session = SessionModel(name=session.name, query=session.query)
+def create_session(
+    session: SessionCreate,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
+    db_session = SessionModel(
+        name=session.name, query=session.query, user_id=current_user_id
+    )
     db.add(db_session)
     db.commit()
     db.refresh(db_session)
     return SessionResponse(
         id=db_session.id,
+        user_id=db_session.user_id,
         name=db_session.name,
         query=db_session.query,
         created_at=db_session.created_at,
@@ -105,14 +282,22 @@ def create_session(session: SessionCreate, db: Session = Depends(get_db)):
 
 
 @app.get("/sessions", response_model=List[SessionResponse])
-def get_sessions(db: Session = Depends(get_db)):
-    sessions = db.query(SessionModel).order_by(SessionModel.created_at.desc()).all()
+def get_sessions(
+    db: Session = Depends(get_db), current_user_id: str = Depends(get_current_user)
+):
+    sessions = (
+        db.query(SessionModel)
+        .filter(SessionModel.user_id == current_user_id)
+        .order_by(SessionModel.created_at.desc())
+        .all()
+    )
     result = []
     for s in sessions:
         paper_count = db.query(Paper).filter(Paper.session_id == s.id).count()
         result.append(
             SessionResponse(
                 id=s.id,
+                user_id=s.user_id,
                 name=s.name,
                 query=s.query,
                 created_at=s.created_at,
@@ -124,10 +309,17 @@ def get_sessions(db: Session = Depends(get_db)):
 
 
 @app.get("/sessions/{session_id}", response_model=SessionFullResponse)
-def get_session(session_id: str, db: Session = Depends(get_db)):
+def get_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     papers = db.query(Paper).filter(Paper.session_id == session_id).all()
     analyses = db.query(Analysis).filter(Analysis.session_id == session_id).all()
@@ -194,6 +386,7 @@ def get_session(session_id: str, db: Session = Depends(get_db)):
 
     return SessionFullResponse(
         id=db_session.id,
+        user_id=db_session.user_id,
         name=db_session.name,
         query=db_session.query,
         created_at=db_session.created_at,
@@ -246,10 +439,14 @@ async def run_orchestration(
     session_id: str,
     page: int = Query(0, ge=0),
     db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
 ):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     result = await orchestrate(db_session.query, session_id, page)
 
@@ -258,7 +455,9 @@ async def run_orchestration(
 
     logger.info(f"Processing {len(papers_data)} papers for session {session_id}")
     for i, paper_data in enumerate(papers_data[:3]):
-        logger.info(f"Paper {i}: '{paper_data.get('title', 'Unknown')[:50]}...' - citation_count={paper_data.get('citation_count')}, source={paper_data.get('source')}")
+        logger.info(
+            f"Paper {i}: '{paper_data.get('title', 'Unknown')[:50]}...' - citation_count={paper_data.get('citation_count')}, source={paper_data.get('source')}"
+        )
 
     for paper_data in papers_data:
         existing_paper = (
@@ -289,7 +488,9 @@ async def run_orchestration(
             db.commit()
             db.refresh(existing_paper)
             paper = existing_paper
-            logger.info(f"Updated paper {paper.id}: citation_count={paper.citation_count}")
+            logger.info(
+                f"Updated paper {paper.id}: citation_count={paper.citation_count}"
+            )
         else:
             paper = Paper(
                 session_id=session_id,
@@ -306,7 +507,9 @@ async def run_orchestration(
             db.add(paper)
             db.commit()
             db.refresh(paper)
-            logger.info(f"Created paper {paper.id}: citation_count={paper.citation_count}")
+            logger.info(
+                f"Created paper {paper.id}: citation_count={paper.citation_count}"
+            )
 
         citations_data = paper_data.get("citation", {})
         existing_citation = (
@@ -360,7 +563,9 @@ async def run_orchestration(
             else:
                 key_contributions = str(kp or "")
 
-            methodology = inferred.get("explanation_approach", "") or derived.get("methodology", "")
+            methodology = inferred.get("explanation_approach", "") or derived.get(
+                "methodology", ""
+            )
             limitations = inferred.get("limitations", "")
 
             existing_summary = (
@@ -386,7 +591,9 @@ async def run_orchestration(
         paper_obj = db.query(Paper).filter(Paper.id == paper.id).first()
         summary_obj = db.query(Summary).filter(Summary.paper_id == paper.id).first()
         citation_obj = db.query(Citation).filter(Citation.paper_id == paper.id).first()
-        logger.info(f"Returning paper {paper_obj.id}: citation_count={paper_obj.citation_count}")
+        logger.info(
+            f"Returning paper {paper_obj.id}: citation_count={paper_obj.citation_count}"
+        )
 
         papers_with_details.append(
             PaperWithDetails(
@@ -486,10 +693,17 @@ async def run_orchestration(
 
 
 @app.get("/sessions/{session_id}/conflicts", response_model=List[ConflictResponse])
-def get_session_conflicts(session_id: str, db: Session = Depends(get_db)):
+def get_session_conflicts(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     conflicts = db.query(Conflict).filter(Conflict.session_id == session_id).all()
     return [
@@ -517,7 +731,15 @@ def resolve_conflict(
     conflict_id: str,
     resolution: ConflictResolve,
     db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
 ):
+    db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     conflict = (
         db.query(Conflict)
         .filter(Conflict.id == conflict_id, Conflict.session_id == session_id)
@@ -539,10 +761,14 @@ def resolve_conflict(
 async def detect_conflicts(
     session_id: str,
     db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
 ):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     papers = db.query(Paper).filter(Paper.session_id == session_id).all()
     analyses = db.query(Analysis).filter(Analysis.session_id == session_id).all()
@@ -613,10 +839,19 @@ async def detect_conflicts(
 
 
 @app.patch("/papers/{paper_id}/note", response_model=NoteResponse)
-def update_note(paper_id: str, note: NoteCreate, db: Session = Depends(get_db)):
+def update_note(
+    paper_id: str,
+    note: NoteCreate,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     paper = db.query(Paper).filter(Paper.id == paper_id).first()
     if not paper:
         raise HTTPException(status_code=404, detail="Paper not found")
+
+    session = db.query(SessionModel).filter(SessionModel.id == paper.session_id).first()
+    if session.user_id and session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     existing_note = db.query(Note).filter(Note.paper_id == paper_id).first()
     if existing_note:
@@ -646,11 +881,17 @@ def update_note(paper_id: str, note: NoteCreate, db: Session = Depends(get_db)):
 
 @app.post("/sessions/{session_id}/synthesize")
 def synthesize_papers(
-    session_id: str, paper_ids: List[str], db: Session = Depends(get_db)
+    session_id: str,
+    paper_ids: List[str],
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
 ):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     papers = db.query(Paper).filter(Paper.id.in_(paper_ids)).all()
     if not papers:
@@ -682,10 +923,17 @@ def synthesize_papers(
 
 
 @app.get("/sessions/{session_id}/export/bib")
-def export_bib(session_id: str, db: Session = Depends(get_db)):
+def export_bib(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     papers = db.query(Paper).filter(Paper.session_id == session_id).all()
 
@@ -719,10 +967,17 @@ def export_bib(session_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/sessions/{session_id}/export/txt")
-def export_txt(session_id: str, db: Session = Depends(get_db)):
+def export_txt(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     papers = db.query(Paper).filter(Paper.session_id == session_id).all()
     citations = (
@@ -753,7 +1008,11 @@ def export_txt(session_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/digests", response_model=ScheduledDigestResponse)
-async def create_digest(digest: ScheduledDigestCreate, db: Session = Depends(get_db)):
+async def create_digest(
+    digest: ScheduledDigestCreate,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     is_valid, error = await digest_scheduler.verify_query_syntax(digest.query)
     if not is_valid:
         raise HTTPException(status_code=400, detail=error)
@@ -764,6 +1023,7 @@ async def create_digest(digest: ScheduledDigestCreate, db: Session = Depends(get
     next_run = calculate_next_run(now, digest.frequency)
 
     db_digest = ScheduledDigest(
+        user_id=current_user_id,
         name=digest.name,
         query=digest.query,
         frequency=digest.frequency,
@@ -792,9 +1052,14 @@ async def create_digest(digest: ScheduledDigestCreate, db: Session = Depends(get
 
 
 @app.get("/digests", response_model=List[ScheduledDigestResponse])
-def get_digests(db: Session = Depends(get_db)):
+def get_digests(
+    db: Session = Depends(get_db), current_user_id: str = Depends(get_current_user)
+):
     digests = (
-        db.query(ScheduledDigest).order_by(ScheduledDigest.created_at.desc()).all()
+        db.query(ScheduledDigest)
+        .filter(ScheduledDigest.user_id == current_user_id)
+        .order_by(ScheduledDigest.created_at.desc())
+        .all()
     )
     return [
         ScheduledDigestResponse(
@@ -814,10 +1079,17 @@ def get_digests(db: Session = Depends(get_db)):
 
 
 @app.get("/digests/{digest_id}", response_model=ScheduledDigestWithRuns)
-def get_digest(digest_id: str, db: Session = Depends(get_db)):
+def get_digest(
+    digest_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     digest = db.query(ScheduledDigest).filter(ScheduledDigest.id == digest_id).first()
     if not digest:
         raise HTTPException(status_code=404, detail="Digest not found")
+
+    if digest.user_id and digest.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     runs = (
         db.query(DigestRun)
@@ -857,10 +1129,17 @@ def get_digest(digest_id: str, db: Session = Depends(get_db)):
 
 
 @app.delete("/digests/{digest_id}")
-def delete_digest(digest_id: str, db: Session = Depends(get_db)):
+def delete_digest(
+    digest_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     digest = db.query(ScheduledDigest).filter(ScheduledDigest.id == digest_id).first()
     if not digest:
         raise HTTPException(status_code=404, detail="Digest not found")
+
+    if digest.user_id and digest.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     scheduler.remove_job(digest_id)
 
@@ -871,10 +1150,17 @@ def delete_digest(digest_id: str, db: Session = Depends(get_db)):
 
 
 @app.patch("/digests/{digest_id}/toggle")
-def toggle_digest(digest_id: str, db: Session = Depends(get_db)):
+def toggle_digest(
+    digest_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     digest = db.query(ScheduledDigest).filter(ScheduledDigest.id == digest_id).first()
     if not digest:
         raise HTTPException(status_code=404, detail="Digest not found")
+
+    if digest.user_id and digest.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     digest.is_active = not digest.is_active
 
@@ -893,10 +1179,17 @@ def toggle_digest(digest_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/digests/{digest_id}/run")
-def trigger_digest_run(digest_id: str, db: Session = Depends(get_db)):
+def trigger_digest_run(
+    digest_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     digest = db.query(ScheduledDigest).filter(ScheduledDigest.id == digest_id).first()
     if not digest:
         raise HTTPException(status_code=404, detail="Digest not found")
+
+    if digest.user_id and digest.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     scheduler.trigger_manual_run(digest_id)
 
@@ -904,10 +1197,17 @@ def trigger_digest_run(digest_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/digests/{digest_id}/preview")
-async def preview_digest(digest_id: str, db: Session = Depends(get_db)):
+async def preview_digest(
+    digest_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     digest = db.query(ScheduledDigest).filter(ScheduledDigest.id == digest_id).first()
     if not digest:
         raise HTTPException(status_code=404, detail="Digest not found")
+
+    if digest.user_id and digest.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     sessions = (
         db.query(SessionModel)
@@ -938,10 +1238,17 @@ async def preview_digest(digest_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/sessions/{session_id}/roadmap", response_model=RoadmapResponse)
-async def generate_roadmap(session_id: str, db: Session = Depends(get_db)):
+async def generate_roadmap(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
 
     papers = db.query(Paper).filter(Paper.session_id == session_id).all()
     analyses = db.query(Analysis).filter(Analysis.session_id == session_id).all()
@@ -957,7 +1264,7 @@ async def generate_roadmap(session_id: str, db: Session = Depends(get_db)):
             "authors": p.authors,
             "year": p.year,
             "abstract": p.abstract,
-            "citation_count": p.citation_count
+            "citation_count": p.citation_count,
         }
         for p in papers
     ]
@@ -970,17 +1277,21 @@ async def generate_roadmap(session_id: str, db: Session = Depends(get_db)):
     for p in papers:
         summary = db.query(Summary).filter(Summary.paper_id == p.id).first()
         if summary:
-            summaries_data.append({
-                "abstract_compression": summary.abstract_compression,
-                "key_contributions": summary.key_contributions,
-                "methodology": summary.methodology,
-                "limitations": summary.limitations
-            })
+            summaries_data.append(
+                {
+                    "abstract_compression": summary.abstract_compression,
+                    "key_contributions": summary.key_contributions,
+                    "methodology": summary.methodology,
+                    "limitations": summary.limitations,
+                }
+            )
 
     notes_data = []
     for p in papers:
         notes = db.query(Note).filter(Note.paper_id == p.id).all()
-        notes_data.extend([{"paper_id": n.paper_id, "content": n.content} for n in notes])
+        notes_data.extend(
+            [{"paper_id": n.paper_id, "content": n.content} for n in notes]
+        )
 
     result = await roadmap.run(
         papers=papers_data,
@@ -991,14 +1302,14 @@ async def generate_roadmap(session_id: str, db: Session = Depends(get_db)):
             {"title": c.title, "description": c.description, "severity": c.severity}
             for c in conflicts
         ],
-        session_id=session_id
+        session_id=session_id,
     )
 
     db_roadmap = Roadmap(
         session_id=session_id,
         foundational_papers_json=result["foundational_papers"],
         gap_areas_json=result["gap_areas"],
-        next_queries_json=result["next_query_suggestions"]
+        next_queries_json=result["next_query_suggestions"],
     )
     db.add(db_roadmap)
     db.commit()
@@ -1007,15 +1318,31 @@ async def generate_roadmap(session_id: str, db: Session = Depends(get_db)):
 
 
 @app.get("/sessions/{session_id}/roadmap", response_model=RoadmapResponse)
-def get_roadmap(session_id: str, db: Session = Depends(get_db)):
-    db_roadmap = db.query(Roadmap).filter(Roadmap.session_id == session_id).order_by(Roadmap.created_at.desc()).first()
+def get_roadmap(
+    session_id: str,
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
+):
+    db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
+    if not db_session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    db_roadmap = (
+        db.query(Roadmap)
+        .filter(Roadmap.session_id == session_id)
+        .order_by(Roadmap.created_at.desc())
+        .first()
+    )
     if not db_roadmap:
         raise HTTPException(status_code=404, detail="Roadmap not found")
 
     return RoadmapResponse(
         foundational_papers=db_roadmap.foundational_papers_json,
         gap_areas=db_roadmap.gap_areas_json,
-        next_query_suggestions=db_roadmap.next_queries_json
+        next_query_suggestions=db_roadmap.next_queries_json,
     )
 
 
@@ -1023,18 +1350,19 @@ def get_roadmap(session_id: str, db: Session = Depends(get_db)):
 async def execute_roadmap_query(
     session_id: str,
     query: str,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user_id: str = Depends(get_current_user),
 ):
     db_session = db.query(SessionModel).filter(SessionModel.id == session_id).first()
     if not db_session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    if db_session.user_id and db_session.user_id != current_user_id:
+        raise HTTPException(status_code=403, detail="Access denied")
+
     result = await orchestrate(query, session_id, page=0)
 
-    return {
-        "triggered_query": query,
-        "orchestration_result": result
-    }
+    return {"triggered_query": query, "orchestration_result": result}
 
 
 if __name__ == "__main__":

@@ -1,12 +1,51 @@
 import { React, useEffect } from 'react'
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom'
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
+import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
 import Search from './pages/Search.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import SessionCompare from './pages/SessionCompare.jsx'
 import Roadmap from './pages/Roadmap.jsx'
 import DigestManagement from './components/DigestManagement.jsx'
+import Login from './pages/Login.jsx'
+import Register from './pages/Register.jsx'
 import './app.css'
+
+function ProtectedRoute({ children }) {
+  const { isAuthenticated, loading } = useAuth()
+  
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-spinner" />
+      </div>
+    )
+  }
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />
+  }
+  
+  return children
+}
+
+function GuestRoute({ children }) {
+  const { isAuthenticated, loading } = useAuth()
+  
+  if (loading) {
+    return (
+      <div className="loading-screen">
+        <div className="loading-spinner" />
+      </div>
+    )
+  }
+  
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />
+  }
+  
+  return children
+}
 
 const navItems = [
   { path: '/', label: 'Search', icon: '🔍' },
@@ -16,8 +55,9 @@ const navItems = [
   { path: '/digests', label: 'Digests', icon: '📬' }
 ]
 
-function App() {
+function NavContent() {
   const location = useLocation()
+  const { user, logout, isAuthenticated } = useAuth()
 
   useEffect(() => {
     const handleMouseMove = (e) => {
@@ -35,8 +75,7 @@ function App() {
   }
 
   return (
-    <div className="app-container">
-      {/* Background effects */}
+    <>
       <div className="app-bg-gradient" />
       <motion.div 
         className="app-spotlight"
@@ -47,7 +86,6 @@ function App() {
         transition={{ type: "spring", damping: 30, stiffness: 200 }}
       />
       
-      {/* Floating particles */}
       <div className="app-particles">
         {[...Array(20)].map((_, i) => (
           <motion.div
@@ -71,7 +109,6 @@ function App() {
         ))}
       </div>
 
-      {/* Navigation */}
       <motion.nav 
         className="app-nav"
         initial={{ y: -100, opacity: 0 }}
@@ -80,7 +117,6 @@ function App() {
       >
         <div className="nav-glow" />
         <div className="nav-content">
-          {/* Logo */}
           <Link to="/" className="nav-logo">
             <motion.div 
               className="logo-icon"
@@ -111,7 +147,6 @@ function App() {
             </motion.div>
           </Link>
 
-          {/* Nav Links */}
           <div className="nav-links">
             {navItems.map((item, index) => (
               <motion.div
@@ -144,19 +179,27 @@ function App() {
             ))}
           </div>
 
-          {/* Right section - could add user menu, settings, etc */}
           <div className="nav-actions">
-            <motion.button 
-              className="nav-action-btn"
-              whileHover={{ scale: 1.1 }}
-              whileTap={{ scale: 0.95 }}
-            >
-              <span>⚙️</span>
-            </motion.button>
+            {isAuthenticated ? (
+              <div className="user-menu">
+                <span className="user-name">{user?.username || user?.email}</span>
+                <motion.button 
+                  className="nav-action-btn logout-btn"
+                  onClick={logout}
+                  whileHover={{ scale: 1.1 }}
+                  whileTap={{ scale: 0.95 }}
+                >
+                  <span>🚪</span>
+                </motion.button>
+              </div>
+            ) : (
+              <Link to="/login" className="nav-login-btn">
+                Sign In
+              </Link>
+            )}
           </div>
         </div>
         
-        {/* Animated bottom border */}
         <motion.div 
           className="nav-border"
           initial={{ scaleX: 0 }}
@@ -165,7 +208,6 @@ function App() {
         />
       </motion.nav>
 
-      {/* Main Content */}
       <main className="app-main">
         <AnimatePresence mode="wait">
           <motion.div
@@ -177,18 +219,19 @@ function App() {
             className="page-container"
           >
             <Routes>
-              <Route path="/" element={<Search />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/dashboard/:sessionId" element={<Dashboard />} />
-              <Route path="/roadmap" element={<Roadmap />} />
-              <Route path="/compare" element={<SessionCompare />} />
-              <Route path="/digests" element={<DigestManagement />} />
+              <Route path="/login" element={<GuestRoute><Login /></GuestRoute>} />
+              <Route path="/register" element={<GuestRoute><Register /></GuestRoute>} />
+              <Route path="/" element={<ProtectedRoute><Search /></ProtectedRoute>} />
+              <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+              <Route path="/dashboard/:sessionId" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+              <Route path="/roadmap" element={<ProtectedRoute><Roadmap /></ProtectedRoute>} />
+              <Route path="/compare" element={<ProtectedRoute><SessionCompare /></ProtectedRoute>} />
+              <Route path="/digests" element={<ProtectedRoute><DigestManagement /></ProtectedRoute>} />
             </Routes>
           </motion.div>
         </AnimatePresence>
       </main>
 
-      {/* Footer */}
       <motion.footer 
         className="app-footer"
         initial={{ opacity: 0 }}
@@ -201,19 +244,23 @@ function App() {
             Orchestrix Research Platform
           </span>
           <span className="footer-divider">•</span>
-          <span className="footer-version">v1.0.0</span>
+          <span className="footer-version">v2.0.0</span>
         </div>
       </motion.footer>
+    </>
+  )
+}
+
+function App() {
+  return (
+    <div className="app-container">
+      <AuthProvider>
+        <Router>
+          <NavContent />
+        </Router>
+      </AuthProvider>
     </div>
   )
 }
 
-function AppWrapper() {
-  return (
-    <Router>
-      <App />
-    </Router>
-  )
-}
-
-export default AppWrapper
+export default App
