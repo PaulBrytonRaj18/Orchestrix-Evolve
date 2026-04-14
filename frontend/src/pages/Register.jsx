@@ -1,8 +1,9 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { api } from '../api.js'
 import { useAuth } from '../contexts/AuthContext.jsx'
-import '../app.css'
+import { Eye, EyeOff, Loader2 } from 'lucide-react'
 
 function Register() {
   const navigate = useNavigate()
@@ -11,8 +12,9 @@ function Register() {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -28,137 +30,145 @@ function Register() {
       return
     }
 
-    setLoading(true)
+    setIsLoading(true)
 
     try {
       await register(email, username, password, confirmPassword)
       navigate('/')
     } catch (err) {
-      setError(err.message || 'Registration failed')
+      setError(err.message || 'Failed to create account')
     } finally {
-      setLoading(false)
+      setIsLoading(false)
     }
   }
 
   return (
     <div className="auth-container">
-      <motion.div 
-        className="auth-card"
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
+        transition={{ duration: 0.3 }}
+        className="auth-card"
       >
-        <motion.div 
-          className="auth-glow"
-          animate={{
-            scale: [1, 1.1, 1],
-            opacity: [0.3, 0.5, 0.3]
-          }}
-          transition={{
-            duration: 3,
-            repeat: Infinity,
-            ease: "easeInOut"
-          }}
-        />
-        
-        <motion.div
-          className="auth-icon"
-          animate={{ y: [0, -10, 0] }}
-          transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
-        >
-          🔬
-        </motion.div>
+        <div className="auth-header">
+          <div className="auth-logo">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <path d="m21 21-4.3-4.3"/>
+            </svg>
+          </div>
+          <h1 className="auth-title">Create account</h1>
+          <p className="auth-subtitle">Start your research journey with Orchestrix</p>
+        </div>
 
-        <h1 className="auth-title">Create Account</h1>
-        <p className="auth-subtitle">Join Orchestrix to explore research</p>
+        <form className="auth-form" onSubmit={handleSubmit}>
+          {error && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              className="form-error"
+              style={{ padding: 'var(--space-3)', background: 'var(--error-subtle)', borderRadius: 'var(--radius-md)', color: 'var(--error-primary)' }}
+            >
+              {error}
+            </motion.div>
+          )}
 
-        {error && (
-          <motion.div 
-            className="auth-error"
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
-          >
-            {error}
-          </motion.div>
-        )}
-
-        <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label htmlFor="email">Email</label>
+            <label className="form-label" htmlFor="email">Email</label>
             <input
-              type="email"
               id="email"
+              type="email"
+              className="form-input"
+              placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="Enter your email"
               required
-              disabled={loading}
+              autoComplete="email"
             />
           </div>
 
           <div className="form-group">
-            <label htmlFor="username">Username</label>
+            <label className="form-label" htmlFor="username">Username</label>
             <input
-              type="text"
               id="username"
+              type="text"
+              className="form-input"
+              placeholder="Choose a username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Choose a username"
               required
-              minLength={3}
-              maxLength={50}
-              disabled={loading}
+              autoComplete="username"
             />
           </div>
 
           <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Create a password (min 8 chars)"
-              required
-              minLength={8}
-              disabled={loading}
-            />
+            <label className="form-label" htmlFor="password">Password</label>
+            <div style={{ position: 'relative' }}>
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                className="form-input"
+                placeholder="Create a password (min. 8 characters)"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                style={{ paddingRight: '44px' }}
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                style={{
+                  position: 'absolute',
+                  right: '12px',
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  color: 'var(--text-tertiary)',
+                  padding: '4px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+              </button>
+            </div>
           </div>
 
           <div className="form-group">
-            <label htmlFor="confirmPassword">Confirm Password</label>
+            <label className="form-label" htmlFor="confirmPassword">Confirm Password</label>
             <input
-              type="password"
               id="confirmPassword"
+              type={showPassword ? 'text' : 'password'}
+              className="form-input"
+              placeholder="Confirm your password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Confirm your password"
               required
-              disabled={loading}
+              autoComplete="new-password"
             />
           </div>
 
-          <motion.button
+          <button
             type="submit"
-            className="auth-button"
-            disabled={loading}
-            whileHover={{ scale: loading ? 1 : 1.02 }}
-            whileTap={{ scale: loading ? 1 : 0.98 }}
+            className="btn btn-primary btn-lg w-full"
+            disabled={isLoading}
+            style={{ marginTop: 'var(--space-2)' }}
           >
-            {loading ? (
+            {isLoading ? (
               <>
-                <span className="button-spinner" />
+                <Loader2 size={18} style={{ animation: 'spin 0.8s linear infinite' }} />
                 Creating account...
               </>
             ) : (
-              'Create Account'
+              'Create account'
             )}
-          </motion.button>
+          </button>
         </form>
 
-        <p className="auth-footer">
-          Already have an account? <Link to="/login">Sign in</Link>
-        </p>
+        <div className="auth-footer">
+          Already have an account? <Link to="/login" className="auth-link">Sign in</Link>
+        </div>
       </motion.div>
     </div>
   )

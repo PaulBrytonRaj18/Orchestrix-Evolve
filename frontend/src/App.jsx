@@ -2,6 +2,7 @@ import { React, useEffect } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
+import { ThemeProvider, useTheme } from './contexts/ThemeContext.jsx'
 import Search from './pages/Search.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import SessionCompare from './pages/SessionCompare.jsx'
@@ -9,6 +10,7 @@ import Roadmap from './pages/Roadmap.jsx'
 import DigestManagement from './components/DigestManagement.jsx'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
+import { Sun, Moon, SearchIcon, LayoutDashboard, Map, GitCompare, Mail, LogOut, User } from 'lucide-react'
 import './app.css'
 
 function ProtectedRoute({ children }) {
@@ -48,26 +50,17 @@ function GuestRoute({ children }) {
 }
 
 const navItems = [
-  { path: '/', label: 'Search', icon: '🔍' },
-  { path: '/dashboard', label: 'Dashboard', icon: '📊' },
-  { path: '/roadmap', label: 'Roadmap', icon: '🗺️' },
-  { path: '/compare', label: 'Compare', icon: '⚖️' },
-  { path: '/digests', label: 'Digests', icon: '📬' }
+  { path: '/', label: 'Search', icon: SearchIcon },
+  { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/roadmap', label: 'Roadmap', icon: Map },
+  { path: '/compare', label: 'Compare', icon: GitCompare },
+  { path: '/digests', label: 'Digests', icon: Mail }
 ]
 
 function NavContent() {
   const location = useLocation()
   const { user, logout, isAuthenticated } = useAuth()
-
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      document.body.style.setProperty('--mouse-x', e.clientX + 'px')
-      document.body.style.setProperty('--mouse-y', e.clientY + 'px')
-    }
-
-    window.addEventListener("mousemove", handleMouseMove)
-    return () => window.removeEventListener("mousemove", handleMouseMove)
-  }, [])
+  const { theme, toggleTheme } = useTheme()
 
   const isActiveRoute = (path) => {
     if (path === '/') return location.pathname === '/'
@@ -76,146 +69,73 @@ function NavContent() {
 
   return (
     <>
-      <div className="app-bg-gradient" />
-      <motion.div 
-        className="app-spotlight"
-        animate={{
-          left: 'var(--mouse-x)',
-          top: 'var(--mouse-y)'
-        }}
-        transition={{ type: "spring", damping: 30, stiffness: 200 }}
-      />
-      
-      <div className="app-particles">
-        {[...Array(20)].map((_, i) => (
-          <motion.div
-            key={i}
-            className="app-particle"
-            animate={{
-              y: [0, -30, 0],
-              opacity: [0.1, 0.5, 0.1],
-            }}
-            transition={{
-              duration: 3 + Math.random() * 2,
-              repeat: Infinity,
-              delay: Math.random() * 2,
-              ease: "easeInOut"
-            }}
-            style={{
-              left: `${Math.random() * 100}%`,
-              top: `${Math.random() * 100}%`
-            }}
-          />
-        ))}
-      </div>
-
       <motion.nav 
         className="app-nav"
-        initial={{ y: -100, opacity: 0 }}
+        initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
-        transition={{ type: "spring", stiffness: 100, damping: 20 }}
+        transition={{ duration: 0.3, ease: 'easeOut' }}
       >
-        <div className="nav-glow" />
         <div className="nav-content">
           <Link to="/" className="nav-logo">
-            <motion.div 
-              className="logo-icon"
-              animate={{ 
-                rotate: [0, 5, -5, 0],
-              }}
-              transition={{ 
-                duration: 4, 
-                repeat: Infinity, 
-                ease: "easeInOut" 
-              }}
-            >
-              🔬
-            </motion.div>
-            <motion.span 
-              className="logo-text"
-              whileHover={{ scale: 1.05 }}
-            >
-              Orchestrix
-            </motion.span>
-            <motion.div 
-              className="logo-badge"
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              transition={{ delay: 0.5, type: "spring" }}
-            >
-              RESEARCH
-            </motion.div>
+            <div className="nav-logo-icon">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="8"/>
+                <path d="m21 21-4.3-4.3"/>
+              </svg>
+            </div>
+            <span className="nav-logo-text">Orchestrix</span>
           </Link>
 
           <div className="nav-links">
-            {navItems.map((item, index) => (
-              <motion.div
-                key={item.path}
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 * index }}
-              >
+            {navItems.map((item) => {
+              const Icon = item.icon
+              return (
                 <Link 
+                  key={item.path}
                   to={item.path}
                   className={`nav-link ${isActiveRoute(item.path) ? 'active' : ''}`}
                 >
-                  <motion.div
-                    className="nav-link-content"
-                    whileHover={{ scale: 1.05, y: -2 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    <span className="nav-icon">{item.icon}</span>
-                    <span className="nav-label">{item.label}</span>
-                    {isActiveRoute(item.path) && (
-                      <motion.div
-                        className="nav-active-indicator"
-                        layoutId="navIndicator"
-                        transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                      />
-                    )}
-                  </motion.div>
+                  <Icon size={16} strokeWidth={1.75} />
+                  <span>{item.label}</span>
                 </Link>
-              </motion.div>
-            ))}
+              )
+            })}
           </div>
 
           <div className="nav-actions">
+            <button 
+              className="nav-icon-btn" 
+              onClick={toggleTheme}
+              title={theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode'}
+            >
+              {theme === 'light' ? <Moon size={18} strokeWidth={1.75} /> : <Sun size={18} strokeWidth={1.75} />}
+            </button>
+            
             {isAuthenticated ? (
-              <div className="user-menu">
-                <span className="user-name">{user?.username || user?.email}</span>
-                <motion.button 
-                  className="nav-action-btn logout-btn"
-                  onClick={logout}
-                  whileHover={{ scale: 1.1 }}
-                  whileTap={{ scale: 0.95 }}
-                >
-                  <span>🚪</span>
-                </motion.button>
+              <div className="user-menu" onClick={logout}>
+                <div className="user-avatar">
+                  {user?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
+                </div>
+                <span className="user-name">{user?.username || user?.email?.split('@')[0]}</span>
+                <LogOut size={14} strokeWidth={1.75} style={{ color: 'var(--text-tertiary)' }} />
               </div>
             ) : (
-              <Link to="/login" className="nav-login-btn">
-                Sign In
+              <Link to="/login" className="btn btn-primary">
+                Sign in
               </Link>
             )}
           </div>
         </div>
-        
-        <motion.div 
-          className="nav-border"
-          initial={{ scaleX: 0 }}
-          animate={{ scaleX: 1 }}
-          transition={{ delay: 0.3, duration: 0.8 }}
-        />
       </motion.nav>
 
       <main className="app-main">
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            transition={{ duration: 0.3 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2 }}
             className="page-container"
           >
             <Routes>
@@ -232,21 +152,11 @@ function NavContent() {
         </AnimatePresence>
       </main>
 
-      <motion.footer 
-        className="app-footer"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.5 }}
-      >
+      <footer className="app-footer">
         <div className="footer-content">
-          <div className="footer-glow" />
-          <span className="footer-text">
-            Orchestrix Research Platform
-          </span>
-          <span className="footer-divider">•</span>
-          <span className="footer-version">v2.0.0</span>
+          Orchestrix Research Platform
         </div>
-      </motion.footer>
+      </footer>
     </>
   )
 }
@@ -255,9 +165,11 @@ function App() {
   return (
     <div className="app-container">
       <AuthProvider>
-        <Router>
-          <NavContent />
-        </Router>
+        <ThemeProvider>
+          <Router>
+            <NavContent />
+          </Router>
+        </ThemeProvider>
       </AuthProvider>
     </div>
   )

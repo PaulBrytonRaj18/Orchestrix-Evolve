@@ -1,15 +1,27 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
-import { api, isAuthenticated, getUser } from '../api.js'
+import { api, isAuthenticated as checkToken, getUser } from '../api.js'
 
 const AuthContext = createContext(null)
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(getUser())
+  const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    const initAuth = () => {
+      const storedUser = getUser()
+      const hasToken = checkToken()
+      
+      if (storedUser && hasToken) {
+        setUser(storedUser)
+      }
+      setLoading(false)
+    }
+    
+    initAuth()
+    
     const handleStorageChange = () => {
-      setUser(getUser())
+      initAuth()
     }
     
     const handleLogout = () => {
@@ -18,8 +30,6 @@ export function AuthProvider({ children }) {
 
     window.addEventListener('storage', handleStorageChange)
     window.addEventListener('auth:logout', handleLogout)
-    
-    setLoading(false)
     
     return () => {
       window.removeEventListener('storage', handleStorageChange)
@@ -47,7 +57,7 @@ export function AuthProvider({ children }) {
   const value = {
     user,
     loading,
-    isAuthenticated: !!user,
+    isAuthenticated: checkToken(),
     login,
     register,
     logout

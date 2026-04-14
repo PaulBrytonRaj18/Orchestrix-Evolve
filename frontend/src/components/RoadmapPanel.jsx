@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { api } from '../api.js'
+import { Map, FileText, RefreshCw, Search, ArrowRight } from 'lucide-react'
 
 function RoadmapPanel({ roadmap, sessionId, onQueryClick }) {
   const [isGenerating, setIsGenerating] = useState(false)
@@ -8,7 +9,7 @@ function RoadmapPanel({ roadmap, sessionId, onQueryClick }) {
   const generateRoadmap = async () => {
     setIsGenerating(true)
     try {
-      const newRoadmap = await api.generateRoadmap(sessionId)
+      await api.generateRoadmap(sessionId)
       window.location.reload()
     } catch (error) {
       console.error('Error generating roadmap:', error)
@@ -18,132 +19,166 @@ function RoadmapPanel({ roadmap, sessionId, onQueryClick }) {
 
   if (!roadmap) {
     return (
-      <div className="roadmap-empty">
-        <span className="empty-icon">🗺️</span>
-        <p>No roadmap generated yet</p>
-        <button 
-          onClick={generateRoadmap} 
+      <div className="empty-state">
+        <div className="empty-icon">
+          <Map size={32} strokeWidth={1} />
+        </div>
+        <h3 className="empty-title">No roadmap generated</h3>
+        <p className="empty-description">
+          Generate a roadmap to see research directions and insights
+        </p>
+        <button
+          className="btn btn-primary"
+          onClick={generateRoadmap}
           disabled={isGenerating}
-          className="generate-roadmap-btn"
+          style={{ marginTop: 'var(--space-4)' }}
         >
-          {isGenerating ? 'Generating...' : 'Generate Roadmap'}
+          {isGenerating ? <RefreshCw size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> : <Map size={14} />}
+          Generate Roadmap
         </button>
       </div>
     )
   }
 
   return (
-    <div className="roadmap-container">
-      <div className="roadmap-header">
-        <h2>Research Roadmap</h2>
-        <button 
-          onClick={generateRoadmap} 
-          disabled={isGenerating}
-          className="regenerate-btn"
-        >
-          {isGenerating ? 'Regenerating...' : '🔄 Regenerate'}
-        </button>
-      </div>
-
-      <section className="roadmap-section foundational-papers">
-        <h3>📚 Foundational Papers</h3>
-        <p className="section-description">
-          Papers ranked by citation impact and recency
-        </p>
-        {roadmap.foundational_papers && roadmap.foundational_papers.length > 0 ? (
-          <div className="papers-grid">
-            {roadmap.foundational_papers.map((paper, idx) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-8)' }}>
+      {/* Foundational Papers */}
+      {roadmap.foundational_papers?.length > 0 && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
+            <FileText size={18} style={{ color: 'var(--accent-primary)' }} />
+            <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-semibold)' }}>Foundational Papers</h3>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 'var(--space-3)' }}>
+            {roadmap.foundational_papers.slice(0, 6).map((paper, idx) => (
               <motion.div
                 key={paper.paper_id || idx}
-                className="foundational-paper-card"
-                initial={{ opacity: 0, y: 20 }}
+                className="card card-hover"
+                initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: idx * 0.1 }}
+                transition={{ delay: idx * 0.05 }}
+                style={{ padding: 'var(--space-4)' }}
               >
-                <div className="priority-badge">#{paper.priority}</div>
-                <h4>{paper.title}</h4>
-                <div className="paper-meta">
-                  <span>{paper.year}</span>
-                  <span>{paper.citation_count} citations</span>
-                </div>
-                <p className="paper-reason">{paper.reason}</p>
-              </motion.div>
-            ))}
-          </div>
-        ) : (
-          <p className="no-data">No foundational papers identified yet</p>
-        )}
-      </section>
-
-      <section className="roadmap-section gap-areas">
-        <h3>🔍 Research Gaps</h3>
-        <p className="section-description">
-          Unanswered questions identified across your research collection
-        </p>
-        {roadmap.gap_areas && roadmap.gap_areas.length > 0 ? (
-          <div className="gaps-list">
-            {roadmap.gap_areas.map((gap, idx) => (
-              <motion.div
-                key={idx}
-                className={`gap-card severity-${gap.severity}`}
-                initial={{ opacity: 0, x: -20 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: idx * 0.1 }}
-              >
-                <div className="gap-header">
-                  <span className={`severity-badge ${gap.severity}`}>
-                    {gap.severity.toUpperCase()}
-                  </span>
-                  <h4>{gap.question}</h4>
-                </div>
-                <p className="gap-evidence">{gap.evidence}</p>
-                {gap.related_papers && gap.related_papers.length > 0 && (
-                  <div className="related-papers">
-                    <span>Related to {gap.related_papers.length} paper(s)</span>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
+                  <div style={{
+                    width: '24px',
+                    height: '24px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--accent-subtle)',
+                    color: 'var(--accent-primary)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 'var(--text-xs)',
+                    fontWeight: 'var(--font-bold)',
+                    flexShrink: 0
+                  }}>
+                    {paper.priority}
                   </div>
-                )}
+                  <div>
+                    <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)', lineHeight: 'var(--leading-tight)' }}>
+                      {paper.title}
+                    </h4>
+                    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginBottom: 'var(--space-2)' }}>
+                      {paper.year} • {paper.citation_count} citations
+                    </p>
+                    {paper.reason && (
+                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                        {paper.reason}
+                      </p>
+                    )}
+                  </div>
+                </div>
               </motion.div>
             ))}
           </div>
-        ) : (
-          <p className="no-data">No research gaps identified yet</p>
-        )}
-      </section>
+        </div>
+      )}
 
-      <section className="roadmap-section query-suggestions">
-        <h3>🎯 Next Steps</h3>
-        <p className="section-description">
-          Click any suggestion to run a new search
-        </p>
-        {roadmap.next_query_suggestions && roadmap.next_query_suggestions.length > 0 ? (
-          <div className="queries-list">
+      {/* Research Gaps */}
+      {roadmap.gap_areas?.length > 0 && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
+            <Search size={18} style={{ color: 'var(--warning-primary)' }} />
+            <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-semibold)' }}>Research Gaps</h3>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+            {roadmap.gap_areas.map((gap, idx) => (
+              <div key={idx} className="card" style={{ padding: 'var(--space-4)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
+                  <span className={`badge badge-${gap.severity === 'high' ? 'error' : gap.severity === 'medium' ? 'warning' : 'default'}`}>
+                    {gap.severity}
+                  </span>
+                  <div>
+                    <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' }}>
+                      {gap.question}
+                    </h4>
+                    {gap.evidence && (
+                      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                        {gap.evidence}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Next Steps */}
+      {roadmap.next_query_suggestions?.length > 0 && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-4)' }}>
+            <ArrowRight size={18} style={{ color: 'var(--success-primary)' }} />
+            <h3 style={{ fontSize: 'var(--text-lg)', fontWeight: 'var(--font-semibold)' }}>Suggested Research</h3>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
             {roadmap.next_query_suggestions.map((q, idx) => (
               <motion.button
                 key={idx}
-                className="query-suggestion-btn"
-                onClick={() => onQueryClick(q.query)}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: idx * 0.1 }}
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.98 }}
+                className="card card-hover"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: idx * 0.05 }}
+                onClick={() => onQueryClick && onQueryClick(q.query)}
+                style={{ 
+                  padding: 'var(--space-4)', 
+                  textAlign: 'left',
+                  width: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 'var(--space-2)'
+                }}
               >
-                <div className="query-main">
-                  <span className="query-icon">🔍</span>
-                  <span className="query-text">{q.query}</span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)' }}>
+                    {q.query}
+                  </span>
+                  <ArrowRight size={14} style={{ color: 'var(--text-tertiary)' }} />
                 </div>
-                <div className="query-details">
-                  <span className="query-rationale">{q.rationale}</span>
-                  <span className="query-insight">Expected: {q.expected_insight}</span>
-                </div>
-                <span className="click-hint">Click to search →</span>
+                {q.rationale && (
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                    {q.rationale}
+                  </p>
+                )}
               </motion.button>
             ))}
           </div>
-        ) : (
-          <p className="no-data">No query suggestions available</p>
-        )}
-      </section>
+        </div>
+      )}
+
+      {/* Regenerate Button */}
+      <div style={{ display: 'flex', justifyContent: 'center', paddingTop: 'var(--space-4)' }}>
+        <button
+          className="btn btn-secondary"
+          onClick={generateRoadmap}
+          disabled={isGenerating}
+        >
+          {isGenerating ? <RefreshCw size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> : <RefreshCw size={14} />}
+          Regenerate Roadmap
+        </button>
+      </div>
     </div>
   )
 }

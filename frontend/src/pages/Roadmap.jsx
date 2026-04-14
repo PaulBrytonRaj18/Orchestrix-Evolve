@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../api.js'
 import { useNavigate } from 'react-router-dom'
+import { Map, FileText, Plus, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react'
 
 function Roadmap() {
   const navigate = useNavigate()
@@ -25,7 +26,7 @@ function Roadmap() {
         try {
           const roadmap = await api.getRoadmap(session.id)
           return { [session.id]: roadmap }
-        } catch (error) {
+        } catch {
           return { [session.id]: null }
         }
       })
@@ -57,249 +58,195 @@ function Roadmap() {
     navigate(`/dashboard/${sessionId}`)
   }
 
-  const toggleRoadmap = (sessionId) => {
-    setExpandedRoadmap(expandedRoadmap === sessionId ? null : sessionId)
-  }
-
   const sessionsWithRoadmaps = sessions.filter(s => roadmaps[s.id])
 
-  return (
-    <div className="roadmap-page-container">
-      <motion.div
-        className="roadmap-page-header"
-        initial={{ opacity: 0, y: -20 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        <h1>🗺️ Research Roadmaps</h1>
-        <p>View and manage research roadmaps for all your sessions. Click "Show Roadmap" to see detailed insights.</p>
-      </motion.div>
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '300px' }}>
+        <Loader2 size={24} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--text-tertiary)' }} />
+      </div>
+    )
+  }
 
-      {loading ? (
-        <div className="roadmap-loading">
-          <motion.div
-            className="loading-spinner"
-            animate={{ rotate: 360 }}
-            transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-          >
-            🔄
-          </motion.div>
-          <p>Loading roadmaps...</p>
+  return (
+    <div>
+      <div style={{ marginBottom: 'var(--space-8)' }}>
+        <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--font-bold)', marginBottom: 'var(--space-2)' }}>
+          Research Roadmaps
+        </h1>
+        <p style={{ color: 'var(--text-secondary)' }}>
+          AI-generated research directions and foundational papers
+        </p>
+      </div>
+
+      {sessions.length === 0 ? (
+        <div className="empty-state">
+          <div className="empty-icon">
+            <Map size={32} strokeWidth={1} />
+          </div>
+          <h3 className="empty-title">No sessions yet</h3>
+          <p className="empty-description">
+            Start a search to create your first research roadmap
+          </p>
+          <button onClick={() => navigate('/')} className="btn btn-primary" style={{ marginTop: 'var(--space-4)' }}>
+            <Plus size={16} />
+            Start Searching
+          </button>
         </div>
       ) : (
-        <>
-          <motion.div
-            className="roadmap-stats"
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-          >
-            <div className="stat-card">
-              <span className="stat-number">{sessions.length}</span>
-              <span className="stat-label">Total Sessions</span>
-            </div>
-            <div className="stat-card">
-              <span className="stat-number">{sessionsWithRoadmaps.length}</span>
-              <span className="stat-label">Roadmaps Generated</span>
-            </div>
-            <div className="stat-card highlight">
-              <span className="stat-number">
-                {sessionsWithRoadmaps.reduce((acc, s) => {
-                  const r = roadmaps[s.id]
-                  return acc + (r?.foundational_papers?.length || 0)
-                }, 0)}
-              </span>
-              <span className="stat-label">Foundational Papers</span>
-            </div>
-          </motion.div>
-
-          {sessions.length === 0 ? (
-            <motion.div
-              className="roadmap-empty-state"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-            >
-              <span className="empty-icon">🗺️</span>
-              <h2>No Sessions Yet</h2>
-              <p>Create a session and search for papers to generate your first roadmap.</p>
-              <button onClick={() => navigate('/')} className="start-search-btn">
-                🔍 Start Searching
-              </button>
-            </motion.div>
-          ) : (
-            <div className="roadmap-list">
-              {sessions.map((session, index) => {
-                const roadmap = roadmaps[session.id]
-                const isExpanded = expandedRoadmap === session.id
-                const isGenerating = generatingId === session.id
-                
-                return (
-                  <motion.div
-                    key={session.id}
-                    className={`roadmap-card ${roadmap ? 'has-roadmap' : 'no-roadmap'}`}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.05 }}
-                  >
-                    {/* Card Header */}
-                    <div className="roadmap-card-header">
-                      <div className="header-info">
-                        <h3>{session.name}</h3>
-                        <span className="session-date">
-                          {new Date(session.created_at).toLocaleDateString(undefined, {
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric'
-                          })}
-                        </span>
-                      </div>
-                      <div className="header-actions">
-                        <button
-                          onClick={() => handleViewSession(session.id)}
-                          className="view-session-btn"
-                        >
-                          📄 View Session
-                        </button>
-                        <button
-                          onClick={() => handleGenerateRoadmap(session.id)}
-                          disabled={isGenerating}
-                          className="generate-btn"
-                        >
-                          {isGenerating ? '🔄 Generating...' : roadmap ? '🔄 Regenerate' : '✨ Generate'}
-                        </button>
-                      </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          {sessions.map((session) => {
+            const roadmap = roadmaps[session.id]
+            const isExpanded = expandedRoadmap === session.id
+            const isGenerating = generatingId === session.id
+            
+            return (
+              <div key={session.id} className="card">
+                <div style={{ padding: 'var(--space-5)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 'var(--space-4)' }}>
+                    <div style={{ flex: 1 }}>
+                      <h3 style={{ fontSize: 'var(--text-base)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-1)' }}>
+                        {session.name}
+                      </h3>
+                      <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                        {session.query}
+                      </p>
                     </div>
-
-                    {/* Query */}
-                    <div className="roadmap-card-query">
-                      <span className="query-icon">🔍</span>
-                      <span>{session.query}</span>
-                    </div>
-
-                    {/* Show Roadmap Button */}
-                    {roadmap && (
-                      <motion.button
-                        className={`show-roadmap-btn ${isExpanded ? 'expanded' : ''}`}
-                        onClick={() => toggleRoadmap(session.id)}
-                        whileHover={{ scale: 1.01 }}
-                        whileTap={{ scale: 0.99 }}
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => handleViewSession(session.id)}
                       >
-                        <span className="btn-icon">{isExpanded ? '📕' : '📗'}</span>
-                        <span>{isExpanded ? 'Hide Roadmap' : 'Show Roadmap'}</span>
-                        <span className="btn-arrow">{isExpanded ? '▲' : '▼'}</span>
-                      </motion.button>
-                    )}
+                        <FileText size={14} />
+                        View
+                      </button>
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleGenerateRoadmap(session.id)}
+                        disabled={isGenerating}
+                      >
+                        {isGenerating ? (
+                          <Loader2 size={14} style={{ animation: 'spin 0.8s linear infinite' }} />
+                        ) : (
+                          <RefreshCw size={14} />
+                        )}
+                        {roadmap ? 'Regenerate' : 'Generate'}
+                      </button>
+                    </div>
+                  </div>
 
-                    {/* Roadmap Details - Expandable */}
-                    <AnimatePresence>
-                      {roadmap && isExpanded && (
-                        <motion.div
-                          className="roadmap-details"
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.3 }}
-                        >
-                          {/* Foundational Papers */}
-                          <div className="roadmap-section">
-                            <h4>
-                              <span className="section-icon">📚</span>
+                  {roadmap && (
+                    <button
+                      onClick={() => setExpandedRoadmap(isExpanded ? null : session.id)}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-2)',
+                        marginTop: 'var(--space-4)',
+                        padding: 'var(--space-2) var(--space-3)',
+                        fontSize: 'var(--text-sm)',
+                        color: 'var(--accent-primary)',
+                        background: 'var(--accent-subtle)',
+                        borderRadius: 'var(--radius-md)',
+                        width: '100%',
+                        justifyContent: 'center'
+                      }}
+                    >
+                      {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      {isExpanded ? 'Hide' : 'Show'} Roadmap
+                    </button>
+                  )}
+                </div>
+
+                <AnimatePresence>
+                  {roadmap && isExpanded && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: 'auto', opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      style={{ borderTop: '1px solid var(--card-border)' }}
+                    >
+                      <div style={{ padding: 'var(--space-5)' }}>
+                        {/* Foundational Papers */}
+                        {roadmap.foundational_papers?.length > 0 && (
+                          <div style={{ marginBottom: 'var(--space-6)' }}>
+                            <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-3)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                               Foundational Papers
-                              <span className="section-count">{roadmap.foundational_papers?.length || 0}</span>
                             </h4>
-                            {roadmap.foundational_papers && roadmap.foundational_papers.length > 0 ? (
-                              <div className="papers-list">
-                                {roadmap.foundational_papers.map((paper, idx) => (
-                                  <div key={paper.paper_id || idx} className="paper-item">
-                                    <div className="paper-priority">#{paper.priority}</div>
-                                    <div className="paper-content">
-                                      <h5>{paper.title}</h5>
-                                      <div className="paper-meta">
-                                        <span className="meta-item">📅 {paper.year}</span>
-                                        <span className="meta-item">📖 {paper.citation_count} citations</span>
-                                      </div>
-                                      <p className="paper-reason">{paper.reason}</p>
-                                    </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                              {roadmap.foundational_papers.slice(0, 5).map((paper, idx) => (
+                                <div key={paper.paper_id || idx} style={{ display: 'flex', gap: 'var(--space-3)', padding: 'var(--space-3)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
+                                  <span style={{ fontSize: 'var(--text-xs)', fontWeight: 'var(--font-semibold)', color: 'var(--accent-primary)', minWidth: '24px' }}>
+                                    #{paper.priority}
+                                  </span>
+                                  <div style={{ flex: 1 }}>
+                                    <p style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' }}>
+                                      {paper.title}
+                                    </p>
+                                    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+                                      {paper.year} • {paper.citation_count} citations
+                                    </p>
                                   </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="no-data">No foundational papers identified yet</p>
-                            )}
+                                </div>
+                              ))}
+                            </div>
                           </div>
+                        )}
 
-                          {/* Research Gaps */}
-                          <div className="roadmap-section">
-                            <h4>
-                              <span className="section-icon">🔍</span>
+                        {/* Gap Areas */}
+                        {roadmap.gap_areas?.length > 0 && (
+                          <div style={{ marginBottom: 'var(--space-6)' }}>
+                            <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-3)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
                               Research Gaps
-                              <span className="section-count">{roadmap.gap_areas?.length || 0}</span>
                             </h4>
-                            {roadmap.gap_areas && roadmap.gap_areas.length > 0 ? (
-                              <div className="gaps-list">
-                                {roadmap.gap_areas.map((gap, idx) => (
-                                  <div key={idx} className={`gap-item severity-${gap.severity}`}>
-                                    <div className="gap-header">
-                                      <span className={`severity-badge ${gap.severity}`}>
-                                        {gap.severity.toUpperCase()}
-                                      </span>
-                                      <h5>{gap.question}</h5>
-                                    </div>
-                                    <p className="gap-evidence">{gap.evidence}</p>
-                                    {gap.related_papers && gap.related_papers.length > 0 && (
-                                      <div className="related-papers">
-                                        <span>📄 Related to {gap.related_papers.length} paper(s)</span>
-                                      </div>
-                                    )}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                              {roadmap.gap_areas.map((gap, idx) => (
+                                <div key={idx} style={{ padding: 'var(--space-3)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+                                    <span className={`badge badge-${gap.severity === 'high' ? 'error' : gap.severity === 'medium' ? 'warning' : 'default'}`}>
+                                      {gap.severity}
+                                    </span>
                                   </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="no-data">No research gaps identified yet</p>
-                            )}
+                                  <p style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' }}>
+                                    {gap.question}
+                                  </p>
+                                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                                    {gap.evidence}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
                           </div>
+                        )}
 
-                          {/* Future Steps / Next Queries */}
-                          <div className="roadmap-section">
-                            <h4>
-                              <span className="section-icon">🎯</span>
-                              Future Steps
-                              <span className="section-count">{roadmap.next_query_suggestions?.length || 0}</span>
+                        {/* Next Steps */}
+                        {roadmap.next_query_suggestions?.length > 0 && (
+                          <div>
+                            <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-3)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                              Suggested Research
                             </h4>
-                            {roadmap.next_query_suggestions && roadmap.next_query_suggestions.length > 0 ? (
-                              <div className="queries-list">
-                                {roadmap.next_query_suggestions.map((q, idx) => (
-                                  <div key={idx} className="query-item">
-                                    <div className="query-main">
-                                      <span className="query-number">{idx + 1}</span>
-                                      <span className="query-text">{q.query}</span>
-                                    </div>
-                                    <div className="query-details">
-                                      <span className="query-rationale">💡 {q.rationale}</span>
-                                      <span className="query-insight">✨ Expected: {q.expected_insight}</span>
-                                    </div>
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <p className="no-data">No next steps suggested yet</p>
-                            )}
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                              {roadmap.next_query_suggestions.slice(0, 5).map((q, idx) => (
+                                <div key={idx} style={{ padding: 'var(--space-3)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
+                                  <p style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' }}>
+                                    {q.query}
+                                  </p>
+                                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>
+                                    {q.rationale}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-
-                    {/* No Roadmap Message */}
-                    {!roadmap && (
-                      <div className="no-roadmap-message">
-                        <span>📝</span>
-                        <p>Generate a roadmap to see detailed insights about foundational papers, research gaps, and future directions.</p>
+                        )}
                       </div>
-                    )}
-                  </motion.div>
-                )
-              })}
-            </div>
-          )}
-        </>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )
+          })}
+        </div>
       )}
     </div>
   )

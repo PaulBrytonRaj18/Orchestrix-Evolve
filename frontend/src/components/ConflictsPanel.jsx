@@ -1,47 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import '../component.css'
+import { api } from '../api.js'
+import { AlertTriangle, Check, X, Loader2, Shield } from 'lucide-react'
 
-const containerVariants = {
-  hidden: { opacity: 0 },
-  visible: {
-    opacity: 1,
-    transition: {
-      staggerChildren: 0.1,
-      delayChildren: 0.1
-    }
-  }
-}
-
-const itemVariants = {
-  hidden: { opacity: 0, y: 20 },
-  visible: {
-    opacity: 1,
-    y: 0,
-    transition: {
-      type: "spring",
-      stiffness: 100,
-      damping: 12
-    }
-  }
-}
-
-const pulseVariants = {
-  pulse: {
-    boxShadow: [
-      "0 0 20px rgba(220, 38, 38, 0.3)",
-      "0 0 40px rgba(220, 38, 38, 0.6)",
-      "0 0 20px rgba(220, 38, 38, 0.3)"
-    ],
-    transition: {
-      duration: 2,
-      repeat: Infinity,
-      ease: "easeInOut"
-    }
-  }
-}
-
-function ConflictsPanel({ sessionId, onConflictResolved }) {
+function ConflictsPanel({ sessionId }) {
   const [conflicts, setConflicts] = useState([])
   const [isLoading, setIsLoading] = useState(false)
   const [selectedConflict, setSelectedConflict] = useState(null)
@@ -57,7 +19,6 @@ function ConflictsPanel({ sessionId, onConflictResolved }) {
   const loadConflicts = async () => {
     setIsLoading(true)
     try {
-      const { api } = await import('../api.js')
       const data = await api.getConflicts(sessionId)
       setConflicts(data)
     } catch (error) {
@@ -72,7 +33,6 @@ function ConflictsPanel({ sessionId, onConflictResolved }) {
     
     setIsResolving(true)
     try {
-      const { api } = await import('../api.js')
       await api.resolveConflict(sessionId, conflictId, resolutionText)
       setConflicts(prev =>
         prev.map(c =>
@@ -83,10 +43,8 @@ function ConflictsPanel({ sessionId, onConflictResolved }) {
       )
       setSelectedConflict(null)
       setResolutionText('')
-      if (onConflictResolved) onConflictResolved()
     } catch (error) {
       console.error('Error resolving conflict:', error)
-      alert('Error resolving conflict: ' + error.message)
     } finally {
       setIsResolving(false)
     }
@@ -95,331 +53,221 @@ function ConflictsPanel({ sessionId, onConflictResolved }) {
   const handleDetectConflicts = async () => {
     setIsLoading(true)
     try {
-      const { api } = await import('../api.js')
       const result = await api.detectConflicts(sessionId)
       setConflicts(result.conflicts || [])
-      if (result.summary) {
-        alert(result.summary)
-      }
     } catch (error) {
       console.error('Error detecting conflicts:', error)
-      alert('Error detecting conflicts: ' + error.message)
     } finally {
       setIsLoading(false)
     }
   }
 
-  const getSeverityColor = (severity) => {
+  const getSeverityBadge = (severity) => {
     switch (severity) {
-      case 'high': return 'severity-high'
-      case 'medium': return 'severity-medium'
-      case 'low': return 'severity-low'
-      default: return 'severity-medium'
-    }
-  }
-
-  const getConflictIcon = (type) => {
-    switch (type) {
-      case 'methodology_conflict': return '🔬'
-      case 'finding_conflict': return '📊'
-      case 'conclusion_conflict': return '📝'
-      case 'data_conflict': return '📈'
-      default: return '⚠️'
+      case 'high':
+        return { class: 'badge-error', label: 'High' }
+      case 'medium':
+        return { class: 'badge-warning', label: 'Medium' }
+      default:
+        return { class: 'badge-default', label: 'Low' }
     }
   }
 
   const unresolvedConflicts = conflicts.filter(c => !c.resolved)
   const resolvedConflicts = conflicts.filter(c => c.resolved)
 
-  return (
-    <div className="conflicts-panel">
-      {/* Header Actions */}
-      <motion.div 
-        className="conflicts-header"
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-      >
-        <div className="conflicts-stats">
-          <motion.div 
-            className="stat-card unresolved"
-            whileHover={{ scale: 1.02 }}
-          >
-            <span className="stat-icon">⚠️</span>
-            <span className="stat-number">{unresolvedConflicts.length}</span>
-            <span className="stat-label">Unresolved</span>
-          </motion.div>
-          <motion.div 
-            className="stat-card resolved"
-            whileHover={{ scale: 1.02 }}
-          >
-            <span className="stat-icon">✓</span>
-            <span className="stat-number">{resolvedConflicts.length}</span>
-            <span className="stat-label">Resolved</span>
-          </motion.div>
-        </div>
+  if (isLoading && conflicts.length === 0) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--space-16)' }}>
+        <Loader2 size={24} style={{ animation: 'spin 0.8s linear infinite', color: 'var(--text-tertiary)' }} />
+      </div>
+    )
+  }
 
-        <motion.button
-          className="detect-conflicts-btn"
+  return (
+    <div>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-6)' }}>
+        <div style={{ display: 'flex', gap: 'var(--space-4)' }}>
+          <div className="stat-card" style={{ padding: 'var(--space-3) var(--space-4)', minWidth: '100px' }}>
+            <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--font-bold)' }}>{unresolvedConflicts.length}</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>Unresolved</div>
+          </div>
+          <div className="stat-card" style={{ padding: 'var(--space-3) var(--space-4)', minWidth: '100px' }}>
+            <div style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--font-bold)' }}>{resolvedConflicts.length}</div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)' }}>Resolved</div>
+          </div>
+        </div>
+        <button
+          className="btn btn-secondary"
           onClick={handleDetectConflicts}
           disabled={isLoading}
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
         >
-          <span className="btn-icon">🔍</span>
-          <span>Detect Conflicts</span>
-        </motion.button>
-      </motion.div>
-
-      {/* Loading State */}
-      {isLoading && (
-        <motion.div
-          className="conflicts-loading"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <motion.div 
-            className="loading-spinner"
-            variants={pulseVariants}
-            animate="pulse"
-          />
-          <p>Analyzing conflicts...</p>
-        </motion.div>
-      )}
+          {isLoading ? <Loader2 size={14} style={{ animation: 'spin 0.8s linear infinite' }} /> : <AlertTriangle size={14} />}
+          Detect Conflicts
+        </button>
+      </div>
 
       {/* Unresolved Conflicts */}
       {unresolvedConflicts.length > 0 && (
-        <motion.div 
-          className="conflicts-section"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-        >
-          <h3 className="section-title">
-            <span className="title-icon">⚠️</span>
-            Unresolved Conflicts
-          </h3>
-          
-          <motion.div 
-            className="conflicts-list"
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
-          >
-            {unresolvedConflicts.map((conflict, index) => (
-              <motion.div
-                key={conflict.id}
-                variants={itemVariants}
-                className={`conflict-card ${getSeverityColor(conflict.severity)}`}
-                whileHover={{ scale: 1.01, y: -2 }}
-              >
-                <div className="conflict-glow" />
-                
-                <div className="conflict-header">
-                  <motion.div 
-                    className="conflict-icon"
-                    animate={{ 
-                      rotate: [0, 10, -10, 0],
-                      scale: [1, 1.1, 1]
-                    }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                  >
-                    {getConflictIcon(conflict.conflict_type)}
-                  </motion.div>
-                  
-                  <div className="conflict-info">
-                    <h4 className="conflict-title">{conflict.title}</h4>
-                    <span className={`severity-badge ${getSeverityColor(conflict.severity)}`}>
-                      {conflict.severity}
-                    </span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)', marginBottom: 'var(--space-6)' }}>
+          {unresolvedConflicts.map((conflict) => {
+            const badge = getSeverityBadge(conflict.severity)
+            return (
+              <div key={conflict.id} className="card" style={{ padding: 'var(--space-5)' }}>
+                <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
+                    <div style={{ 
+                      width: '32px', 
+                      height: '32px', 
+                      borderRadius: 'var(--radius-md)', 
+                      background: 'var(--error-subtle)',
+                      color: 'var(--error-primary)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      flexShrink: 0
+                    }}>
+                      <AlertTriangle size={16} />
+                    </div>
+                    <div>
+                      <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-1)' }}>
+                        {conflict.title}
+                      </h4>
+                      <span className={`badge ${badge.class}`}>{badge.label}</span>
+                    </div>
                   </div>
                 </div>
-
+                
                 {conflict.description && (
-                  <p className="conflict-description">{conflict.description}</p>
+                  <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', marginBottom: 'var(--space-3)', marginLeft: '44px' }}>
+                    {conflict.description}
+                  </p>
                 )}
 
-                <div className="conflict-insights">
-                  {conflict.analysis_insight && (
-                    <div className="insight-box analysis">
-                      <span className="insight-icon">📊</span>
-                      <span className="insight-label">Analysis:</span>
-                      <p>{conflict.analysis_insight}</p>
-                    </div>
-                  )}
-                  {conflict.summarization_insight && (
-                    <div className="insight-box summarization">
-                      <span className="insight-icon">📝</span>
-                      <span className="insight-label">Summary:</span>
-                      <p>{conflict.summarization_insight}</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="conflict-actions">
-                  <motion.button
-                    className="resolve-btn"
+                <div style={{ display: 'flex', gap: 'var(--space-2)', marginLeft: '44px' }}>
+                  <button
+                    className="btn btn-primary btn-sm"
                     onClick={() => setSelectedConflict(conflict)}
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
                   >
-                    <span className="btn-icon">✓</span>
-                    <span>Resolve</span>
-                  </motion.button>
+                    <Check size={14} />
+                    Resolve
+                  </button>
                 </div>
-              </motion.div>
-            ))}
-          </motion.div>
-        </motion.div>
+              </div>
+            )
+          })}
+        </div>
       )}
 
       {/* Resolved Conflicts */}
       {resolvedConflicts.length > 0 && (
-        <motion.div 
-          className="conflicts-section resolved-section"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.2 }}
-        >
-          <h3 className="section-title">
-            <span className="title-icon">✓</span>
-            Resolved Conflicts
-          </h3>
-          
-          <motion.div 
-            className="conflicts-list"
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
-          >
-            {resolvedConflicts.map((conflict, index) => (
-              <motion.div
-                key={conflict.id}
-                variants={itemVariants}
-                className="conflict-card resolved"
-                whileHover={{ scale: 1.01 }}
-              >
-                <div className="conflict-header">
-                  <div className="conflict-icon resolved">✓</div>
-                  <div className="conflict-info">
-                    <h4 className="conflict-title">{conflict.title}</h4>
-                    <span className="resolved-badge">Resolved</span>
-                  </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', color: 'var(--text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+            Resolved
+          </h4>
+          {resolvedConflicts.map((conflict) => (
+            <div key={conflict.id} className="card" style={{ padding: 'var(--space-4)', opacity: 0.7 }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-3)' }}>
+                <div style={{ 
+                  width: '24px', 
+                  height: '24px', 
+                  borderRadius: 'var(--radius-full)', 
+                  background: 'var(--success-subtle)',
+                  color: 'var(--success-primary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  flexShrink: 0
+                }}>
+                  <Check size={12} />
                 </div>
-                
-                {conflict.resolution_notes && (
-                  <div className="resolution-notes">
-                    <span className="resolution-icon">📝</span>
-                    <p>{conflict.resolution_notes}</p>
-                  </div>
-                )}
-              </motion.div>
-            ))}
-          </motion.div>
-        </motion.div>
+                <div>
+                  <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' }}>
+                    {conflict.title}
+                  </h4>
+                  {conflict.resolution_notes && (
+                    <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                      {conflict.resolution_notes}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {/* Empty State */}
       {conflicts.length === 0 && !isLoading && (
-        <motion.div
-          className="conflicts-empty"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-        >
-          <motion.div 
-            className="empty-glow"
-            animate={{
-              scale: [1, 1.3, 1],
-              opacity: [0.3, 0.6, 0.3]
-            }}
-            transition={{ duration: 3, repeat: Infinity }}
-          />
-          <motion.div
-            className="empty-icon"
-            animate={{ y: [0, -10, 0] }}
-            transition={{ duration: 2, repeat: Infinity }}
-          >
-            🛡️
-          </motion.div>
-          <h3 className="empty-title">No Conflicts Detected</h3>
-          <p className="empty-subtitle">
-            Click "Detect Conflicts" to analyze papers for conflicts
+        <div className="empty-state">
+          <div className="empty-icon">
+            <Shield size={32} strokeWidth={1} />
+          </div>
+          <h3 className="empty-title">No conflicts detected</h3>
+          <p className="empty-description">
+            Click "Detect Conflicts" to analyze papers for contradictions
           </p>
-        </motion.div>
+        </div>
       )}
 
       {/* Resolution Modal */}
       <AnimatePresence>
         {selectedConflict && (
           <motion.div
-            className="modal-overlay"
+            className="modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setSelectedConflict(null)}
           >
             <motion.div
-              className="resolution-modal"
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="modal"
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="modal-glow" />
-              
               <div className="modal-header">
-                <h3 className="modal-title">
-                  <span className="modal-icon">✓</span>
-                  Resolve Conflict
-                </h3>
-                <motion.button
-                  className="modal-close"
-                  onClick={() => setSelectedConflict(null)}
-                  whileHover={{ scale: 1.1, rotate: 90 }}
-                  whileTap={{ scale: 0.9 }}
-                >
-                  ✕
-                </motion.button>
+                <h3 className="modal-title">Resolve Conflict</h3>
+                <button className="btn btn-ghost btn-icon" onClick={() => setSelectedConflict(null)}>
+                  <X size={18} />
+                </button>
               </div>
-
-              <div className="modal-content">
-                <div className="conflict-preview">
-                  <h4>{selectedConflict.title}</h4>
-                  <p>{selectedConflict.description}</p>
+              <div className="modal-body">
+                <div style={{ marginBottom: 'var(--space-4)' }}>
+                  <h4 style={{ fontSize: 'var(--text-sm)', fontWeight: 'var(--font-semibold)', marginBottom: 'var(--space-2)' }}>
+                    {selectedConflict.title}
+                  </h4>
+                  {selectedConflict.description && (
+                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                      {selectedConflict.description}
+                    </p>
+                  )}
                 </div>
-
-                <div className="resolution-input">
-                  <label className="input-label">
-                    <span className="label-icon">📝</span>
-                    Resolution Notes
-                  </label>
+                <div className="form-group">
+                  <label className="form-label">Resolution Notes</label>
                   <textarea
-                    className="resolution-textarea"
+                    className="form-input"
                     placeholder="Explain how this conflict was resolved..."
                     value={resolutionText}
                     onChange={(e) => setResolutionText(e.target.value)}
                     rows={4}
+                    style={{ minHeight: '100px', resize: 'vertical' }}
                   />
                 </div>
-
-                <div className="modal-actions">
-                  <motion.button
-                    className="cancel-btn"
-                    onClick={() => setSelectedConflict(null)}
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    Cancel
-                  </motion.button>
-                  <motion.button
-                    className="confirm-resolve-btn"
-                    onClick={() => handleResolve(selectedConflict.id)}
-                    disabled={!resolutionText.trim() || isResolving}
-                    whileHover={resolutionText.trim() ? { scale: 1.02 } : {}}
-                    whileTap={resolutionText.trim() ? { scale: 0.98 } : {}}
-                  >
-                    <span className="btn-icon">✓</span>
-                    <span>{isResolving ? 'Resolving...' : 'Resolve Conflict'}</span>
-                  </motion.button>
-                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn btn-secondary" onClick={() => setSelectedConflict(null)}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  disabled={!resolutionText.trim() || isResolving}
+                  onClick={() => handleResolve(selectedConflict.id)}
+                >
+                  {isResolving ? 'Resolving...' : 'Resolve Conflict'}
+                </button>
               </div>
             </motion.div>
           </motion.div>
