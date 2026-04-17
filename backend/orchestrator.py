@@ -1,26 +1,50 @@
 from datetime import datetime, timezone
 from typing import Dict, List
 import asyncio
+import logging
 
 from agents import discovery, analysis, citation, summarizer, conflict_detector, roadmap
+
+logger = logging.getLogger(__name__)
+
+_session_locks: Dict[str, asyncio.Lock] = {}
+_locks_lock = asyncio.Lock()
 
 
 def utcnow():
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _get_session_lock(session_id: str) -> asyncio.Lock:
+    async with _locks_lock:
+        if session_id not in _session_locks:
+            _session_locks[session_id] = asyncio.Lock()
+        return _session_locks[session_id]
+
+
 async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
     """
     Central orchestration layer that coordinates all agents and records trace log.
     Includes conflict detection between Analysis and Summarization agents.
+    Uses per-session lock to prevent concurrent orchestration of same session.
     """
-    trace = []
+    lock = await _get_session_lock(session_id)
 
-    trace.append({"agent": "Discovery", "status": "running", "timestamp": utcnow()})
+    if lock.locked():
+        logger.warning(f"Session {session_id} already being orchestrated, waiting...")
 
-    papers = await discovery.run(query, page)
+    async with lock:
+        trace = []
 
-    trace[-1] = {**trace[-1], "status": "done", "result": f"{len(papers)} papers found"}
+        trace.append({"agent": "Discovery", "status": "running", "timestamp": utcnow()})
+
+        papers = await discovery.run(query, page)
+
+        trace[-1] = {
+            **trace[-1],
+            "status": "done",
+            "result": f"{len(papers)} papers found",
+        }
 
     analysis_result = None
     conflicts = []
@@ -98,13 +122,17 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
     if papers and len(papers) > 0:
         trace.append({"agent": "Roadmap", "status": "running", "timestamp": utcnow()})
 
-        analysis_data = analysis_result if analysis_result else {
-            "publication_trend": [],
-            "top_authors": [],
-            "keyword_frequency": [],
-            "citation_distribution": [],
-            "emerging_topics": []
-        }
+        analysis_data = (
+            analysis_result
+            if analysis_result
+            else {
+                "publication_trend": [],
+                "top_authors": [],
+                "keyword_frequency": [],
+                "citation_distribution": [],
+                "emerging_topics": [],
+            }
+        )
 
         roadmap_result = await roadmap.run(
             papers=papers,
@@ -112,23 +140,25 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
             summaries=summary_results if summary_results else [],
             notes=[],
             conflicts=conflicts if conflicts else [],
-            session_id=session_id
+            session_id=session_id,
         )
 
         trace[-1] = {
             **trace[-1],
             "status": "done",
             "result": f"Roadmap generated: {len(roadmap_result['foundational_papers'])} foundational papers, "
-                      f"{len(roadmap_result['gap_areas'])} gaps, "
-                      f"{len(roadmap_result['next_query_suggestions'])} query suggestions"
+            f"{len(roadmap_result['gap_areas'])} gaps, "
+            f"{len(roadmap_result['next_query_suggestions'])} query suggestions",
         }
     else:
-        trace.append({
-            "agent": "Roadmap",
-            "status": "skipped",
-            "reason": "No papers available for roadmap generation",
-            "timestamp": utcnow()
-        })
+        trace.append(
+            {
+                "agent": "Roadmap",
+                "status": "skipped",
+                "reason": "No papers available for roadmap generation",
+                "timestamp": utcnow(),
+            }
+        )
 
     return {
         "papers": papers_with_citations,
@@ -140,6 +170,8 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
         "summaries": summaries_list,
         "trace": trace,
         "conflicts": conflicts,
-        "conflict_summary": conflict_result.get("summary", "No conflicts detected") if conflict_result else "No conflicts detected",
-        "roadmap": roadmap_result
+        "conflict_summary": conflict_result.get("summary", "No conflicts detected")
+        if conflict_result
+        else "No conflicts detected",
+        "roadmap": roadmap_result,
     }

@@ -6,16 +6,29 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 import os
+import logging
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
-SECRET_KEY = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
+SECRET_KEY = os.getenv("SECRET_KEY", "")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "1440"))
+
+if not SECRET_KEY or SECRET_KEY == "your-secret-key-change-in-production":
+    logger.warning(
+        "SECRET_KEY not set or using insecure default. Generating ephemeral key."
+    )
+    SECRET_KEY = secrets.token_urlsafe(32)
+    logger.warning(
+        "Using auto-generated secret key. JWTs will be invalid after restart."
+    )
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

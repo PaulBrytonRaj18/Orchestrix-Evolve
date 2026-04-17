@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 from database import get_db, init_db, close_engine, is_postgres
 from models import (
@@ -74,32 +76,32 @@ CORS_ORIGINS = [
     FRONTEND_URL,
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://127.0.0.1:3000",
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
     if is_postgres():
         logger.info("Using PostgreSQL database")
     else:
         logger.info("Using SQLite database")
     scheduler.start()
-
-
-@app.on_event("shutdown")
-def shutdown():
+    yield
     scheduler.stop()
     close_engine()
+    logger.info("Application shutdown complete")
+
+
+app = FastAPI(title="Orchestrix API", version="2.0.0", lifespan=lifespan)
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -880,7 +882,7 @@ def update_note(
 
 
 @app.post("/sessions/{session_id}/synthesize")
-def synthesize_papers(
+async def synthesize_papers(
     session_id: str,
     paper_ids: List[str],
     db: Session = Depends(get_db),
@@ -908,9 +910,7 @@ def synthesize_papers(
             }
         )
 
-    import asyncio
-
-    synthesis_text = asyncio.run(summarizer.synthesize_papers(papers_dict))
+    synthesis_text = await summarizer.synthesize_papers(papers_dict)
 
     synthesis = Synthesis(
         session_id=session_id, paper_ids=paper_ids, content=synthesis_text
