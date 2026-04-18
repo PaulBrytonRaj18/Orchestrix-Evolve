@@ -55,7 +55,7 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String, nullable=False)
     query = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -88,7 +88,7 @@ class Paper(Base):
     __tablename__ = "papers"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     title = Column(String, nullable=False)
     authors = Column(JSON, nullable=False, default=list)
     year = Column(Integer, nullable=True)
@@ -96,7 +96,7 @@ class Paper(Base):
     source_url = Column(String, nullable=True)
     citation_count = Column(Integer, nullable=True)
     relevance_score = Column(Float, nullable=True)
-    external_id = Column(String, nullable=True)
+    external_id = Column(String, nullable=True, index=True)
     source = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -117,7 +117,7 @@ class Analysis(Base):
     __tablename__ = "analyses"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     analysis_type = Column(String, nullable=False)
     data_json = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -132,7 +132,7 @@ class Summary(Base):
     __tablename__ = "summaries"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
+    paper_id = Column(String, ForeignKey("papers.id"), nullable=False, index=True)
     abstract_compression = Column(Text, nullable=True)
     key_contributions = Column(Text, nullable=True)
     methodology = Column(Text, nullable=True)
@@ -149,7 +149,7 @@ class Synthesis(Base):
     __tablename__ = "syntheses"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     paper_ids = Column(JSON, nullable=False, default=list)
     content = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -164,7 +164,7 @@ class Citation(Base):
     __tablename__ = "citations"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
+    paper_id = Column(String, ForeignKey("papers.id"), nullable=False, index=True)
     apa = Column(Text, nullable=True)
     mla = Column(Text, nullable=True)
     ieee = Column(Text, nullable=True)
@@ -181,7 +181,7 @@ class Note(Base):
     __tablename__ = "notes"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
+    paper_id = Column(String, ForeignKey("papers.id"), nullable=False, index=True)
     content = Column(Text, nullable=False, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -195,7 +195,7 @@ class Conflict(Base):
     __tablename__ = "conflicts"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     conflict_type = Column(String, nullable=False)
     severity = Column(String, nullable=False)
     title = Column(String, nullable=False)
@@ -216,7 +216,7 @@ class ScheduledDigest(Base):
     __tablename__ = "scheduled_digests"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id"), nullable=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     name = Column(String, nullable=False)
     query = Column(String, nullable=False)
     frequency = Column(String, nullable=False, default="weekly")
@@ -240,9 +240,9 @@ class DigestRun(Base):
 
     id = Column(String, primary_key=True, default=generate_uuid)
     scheduled_digest_id = Column(
-        String, ForeignKey("scheduled_digests.id"), nullable=False
+        String, ForeignKey("scheduled_digests.id"), nullable=False, index=True
     )
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=True)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=True, index=True)
     query = Column(String, nullable=False)
     new_papers_count = Column(Integer, default=0)
     new_paper_ids = Column(JSON, nullable=False, default=list)
@@ -261,7 +261,7 @@ class Roadmap(Base):
     __tablename__ = "roadmaps"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
     foundational_papers_json = Column(JSON, nullable=False)
     gap_areas_json = Column(JSON, nullable=False)
     next_queries_json = Column(JSON, nullable=False)

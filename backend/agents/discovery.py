@@ -344,7 +344,10 @@ async def query_openalex(
 
 
 async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT) -> List[Dict]:
-    """Main discovery function - queries all sources in parallel."""
+    """Main discovery function - queries all sources in parallel.
+
+    Gracefully handles API failures by continuing with results from working sources.
+    """
     logger.info(f"Discovery: query='{query}', page={page}, limit={limit}")
 
     tasks = [
@@ -357,23 +360,37 @@ async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT) -> List[Dic
 
     all_papers = []
     source_names = ["semantic_scholar", "arxiv", "openalex"]
+    failed_sources = []
+    successful_sources = []
+
     for i, result in enumerate(results):
         if isinstance(result, Exception):
-            logger.error(f"{source_names[i]} failed: {result}")
+            logger.warning(
+                f"{source_names[i]} failed: {result} - continuing with other sources"
+            )
+            failed_sources.append(source_names[i])
         else:
-            logger.info(f"{source_names[i]}: {len(result)} papers")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    f"{source_names[i]}: {len(result) if result else 0} papers"
+                )
+            successful_sources.append(source_names[i])
             if result and len(result) > 0:
-                sample = result[0]
-                logger.info(f"  Sample paper: '{sample.get('title', 'Unknown')[:50]}' - citation_count={sample.get('citation_count')}, source={sample.get('source')}")
-            all_papers.extend(result)
+                all_papers.extend(result)
+
+    if failed_sources:
+        logger.warning(
+            f"Falling back to {len(successful_sources)} sources: {successful_sources}"
+        )
 
     if not all_papers:
-        logger.warning("No papers found")
+        logger.error("All discovery sources failed - no papers available")
         return []
 
     # Deduplicate
     all_papers = deduplicate_papers(all_papers)
-    logger.info(f"After dedup: {len(all_papers)} papers")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"After dedup: {len(all_papers)} papers")
 
     # Compute scores
     citations = [p.get("citation_count") or 0 for p in all_papers]
@@ -393,7 +410,10 @@ async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT) -> List[Dic
 
     all_papers.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
 
-    logger.info(f"Final: {len(all_papers)} papers")
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(
+            f"Final: {len(all_papers)} papers from {successful_sources} (failed: {failed_sources})"
+        )
     return all_papers
 
 

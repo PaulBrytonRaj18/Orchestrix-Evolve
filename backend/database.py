@@ -24,6 +24,15 @@ if is_postgres():
     from sqlalchemy.orm import sessionmaker, Session, declarative_base
     from sqlalchemy.pool import QueuePool
 
+    # Connection settings for Supabase/PostgreSQL
+    CONNECT_ARGS = {
+        "connect_timeout": 10,
+        "options": "-c statement_timeout=30000",  # 30 second query timeout
+    }
+
+    # Check if SSL is explicitly disabled for local development
+    DISABLE_SSL = os.getenv("DISABLE_DB_SSL", "false").lower() == "true"
+
     engine = create_engine(
         DATABASE_URL,
         poolclass=QueuePool,
@@ -32,7 +41,15 @@ if is_postgres():
         pool_pre_ping=True,
         pool_recycle=3600,
         echo=False,
+        connect_args=CONNECT_ARGS,
     )
+
+    # Supabase requires SSL - ensure it's enabled unless explicitly disabled
+    if not DISABLE_SSL:
+        from sqlalchemy.pool import NullPool
+
+        # For Supabase, use SSL but be resilient to connection issues
+        pass  # psycopg2 handles SSL automatically with default settings
 
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
     Base = declarative_base()

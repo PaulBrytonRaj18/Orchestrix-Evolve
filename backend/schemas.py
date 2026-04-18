@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, field_validator
 from typing import Optional, List, Any
 from datetime import datetime
 
@@ -43,8 +43,19 @@ class TokenResponse(BaseModel):
 
 
 class SessionCreate(BaseModel):
-    name: str
-    query: str
+    name: str = Field(..., min_length=1, max_length=200)
+    query: str = Field(..., min_length=1, max_length=1000)
+
+    @field_validator("query", "name")
+    @classmethod
+    def sanitize_input(cls, v: str) -> str:
+        if v and len(v) > 0:
+            dangerous_patterns = ["<script", "javascript:", "onerror=", "onclick="]
+            v_lower = v.lower()
+            for pattern in dangerous_patterns:
+                if pattern in v_lower:
+                    raise ValueError(f"Invalid input detected")
+        return v.strip()
 
 
 class SessionResponse(BaseModel):
@@ -61,15 +72,15 @@ class SessionResponse(BaseModel):
 
 
 class PaperBase(BaseModel):
-    title: str
-    authors: List[str]
-    year: Optional[int] = None
-    abstract: Optional[str] = None
-    source_url: Optional[str] = None
-    citation_count: Optional[int] = None
-    relevance_score: Optional[float] = None
-    external_id: Optional[str] = None
-    source: str
+    title: str = Field(..., min_length=1, max_length=1000)
+    authors: List[str] = Field(default_factory=list, max_length=500)
+    year: Optional[int] = Field(None, ge=1900, le=2100)
+    abstract: Optional[str] = Field(None, max_length=10000)
+    source_url: Optional[str] = Field(None, max_length=2000)
+    citation_count: Optional[int] = Field(None, ge=0)
+    relevance_score: Optional[float] = Field(None, ge=0.0, le=1.0)
+    external_id: Optional[str] = Field(None, max_length=500)
+    source: str = Field(..., max_length=100)
 
 
 class PaperResponse(PaperBase):
@@ -123,8 +134,42 @@ class SummaryResponse(BaseModel):
 class SynthesisResponse(BaseModel):
     id: str
     session_id: str
-    paper_ids: List[str]
-    content: Optional[str] = None
+    paper_ids: List[str] = Field(default_factory=list, max_length=100)
+    content: Optional[str] = Field(None, max_length=50000)
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+    @field_validator("paper_ids", mode="before")
+    @classmethod
+    def sanitize_paper_ids(cls, v):
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return [str(x).strip() for x in v if str(x).strip()]
+        return []
+
+
+class CitationResponse(BaseModel):
+    id: str
+    paper_id: str
+    apa: Optional[str] = Field(None, max_length=2000)
+    mla: Optional[str] = Field(None, max_length=2000)
+    ieee: Optional[str] = Field(None, max_length=2000)
+    chicago: Optional[str] = Field(None, max_length=2000)
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NoteResponse(BaseModel):
+    id: str
+    paper_id: str
+    content: str = Field(..., max_length=10000)
     created_at: datetime
     updated_at: datetime
 
@@ -147,7 +192,7 @@ class CitationResponse(BaseModel):
 
 
 class NoteCreate(BaseModel):
-    content: str
+    content: str = Field(..., min_length=0, max_length=10000)
 
 
 class NoteResponse(BaseModel):
@@ -180,16 +225,16 @@ class ConflictResponse(BaseModel):
 
 
 class ConflictResolve(BaseModel):
-    resolution_notes: str
+    resolution_notes: str = Field(..., min_length=1, max_length=5000)
 
 
 class ScheduledDigestCreate(BaseModel):
-    name: str
-    query: str
+    name: str = Field(..., min_length=1, max_length=200)
+    query: str = Field(..., min_length=1, max_length=1000)
     frequency: str = Field(
         default="weekly", pattern="^(daily|weekly|biweekly|monthly)$"
     )
-    notify_email: Optional[str] = None
+    notify_email: Optional[EmailStr] = None
 
 
 class ScheduledDigestResponse(BaseModel):
