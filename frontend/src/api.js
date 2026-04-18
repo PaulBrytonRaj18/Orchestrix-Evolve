@@ -3,11 +3,21 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 const TOKEN_KEY = 'orchestrix_token'
 const USER_KEY = 'orchestrix_user'
 
+// Import Supabase client for auth methods
+import { supabase } from './lib/supabase'
+
 export function getToken() {
+  // First try to get from Supabase session
+  const supabaseSession = supabase.auth.getSession()
+  if (supabaseSession.data?.session?.access_token) {
+    return supabaseSession.data.session.access_token
+  }
+  // Fallback to localStorage
   return localStorage.getItem(TOKEN_KEY)
 }
 
 export function setToken(token) {
+  // Supabase manages tokens internally, this is for fallback
   localStorage.setItem(TOKEN_KEY, token)
 }
 
@@ -57,31 +67,52 @@ async function fetchJSON(url, options = {}) {
   return response.json()
 }
 
+// Auth functions now use Supabase directly for registration/login
+// But we still call the backend for other operations
 export const api = {
+  // Auth methods - use Supabase directly
   health: () => fetchJSON('/health'),
 
   register: async (email, username, password, confirmPassword) => {
+    // Use backend endpoint which uses Supabase
     const data = await fetchJSON('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, username, password, confirm_password: confirmPassword })
     })
-    setToken(data.access_token)
-    setUser(data.user)
+    
+    // Store token from Supabase response
+    if (data.access_token) {
+      setToken(data.access_token)
+      setUser(data.user)
+    }
     return data
   },
 
   login: async (email, password) => {
+    // Use backend endpoint which uses Supabase
     const data = await fetchJSON('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     })
-    setToken(data.access_token)
-    setUser(data.user)
+    
+    // Store token from Supabase response
+    if (data.access_token) {
+      setToken(data.access_token)
+      setUser(data.user)
+    }
     return data
   },
 
-  logout: () => {
+  logout: async () => {
+    // Call backend logout endpoint
+    try {
+      await fetchJSON('/auth/logout', { method: 'POST' })
+    } catch (e) {
+      // Ignore errors
+    }
     removeToken()
+    // Also sign out from Supabase
+    await supabase.auth.signOut()
     window.dispatchEvent(new CustomEvent('auth:logout'))
   },
 
@@ -130,7 +161,7 @@ export const api = {
   getConflicts: (sessionId) => fetchJSON(`/sessions/${sessionId}/conflicts`),
 
   resolveConflict: (sessionId, conflictId, resolutionNotes) =>
-    fetchJSON(`/sessions/${sessionId}/conflicts/${conflictId}/resolve`, {
+    fetchJSON(`/sessions/${session_id}/conflicts/${conflict_id}/resolve`, {
       method: 'POST',
       body: JSON.stringify({ resolution_notes: resolutionNotes })
     }),

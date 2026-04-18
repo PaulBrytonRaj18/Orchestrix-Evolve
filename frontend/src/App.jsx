@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } f
 import { motion, AnimatePresence } from 'framer-motion'
 import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext.jsx'
+import ErrorBoundary from './components/ErrorBoundary.jsx'
 import Search from './pages/Search.jsx'
 import Dashboard from './pages/Dashboard.jsx'
 import SessionCompare from './pages/SessionCompare.jsx'
@@ -163,15 +164,17 @@ function NavContent() {
 
 function App() {
   return (
-    <div className="app-container">
-      <AuthProvider>
-        <ThemeProvider>
-          <Router>
-            <NavContent />
-          </Router>
-        </ThemeProvider>
-      </AuthProvider>
-    </div>
+    <ErrorBoundary>
+      <div className="app-container">
+        <AuthProvider>
+          <ThemeProvider>
+            <Router>
+              <NavContent />
+            </Router>
+          </ThemeProvider>
+        </AuthProvider>
+      </div>
+    </ErrorBoundary>
   )
 }
 

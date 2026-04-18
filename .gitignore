@@ -79,3 +79,18 @@ frontend/build/
 # Temporary files
 *.tmp
 *.temp
+
+
+
+
+
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.coverage
+*.py,coverage
+.hypothesis/
+.pytest_cache/
+cover/

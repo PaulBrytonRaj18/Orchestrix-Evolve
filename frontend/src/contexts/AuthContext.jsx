@@ -1,79 +1,105 @@
-import React, { createContext, useContext, useState, useEffect } from 'react'
-import { api, isAuthenticated as checkToken, getUser } from '../api.js'
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { supabase } from "../lib/supabase";
 
-const AuthContext = createContext(null)
+const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const initAuth = () => {
-      const storedUser = getUser()
-      const hasToken = checkToken()
-      
-      if (storedUser && hasToken) {
-        setUser(storedUser)
+    // Initialize session on mount
+    async function initAuth() {
+      try {
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
+        setSession(session);
+        setUser(session?.user ?? null);
+      } catch (error) {
+        console.error("Error getting session:", error);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false)
-    }
-    
-    initAuth()
-    
-    const handleStorageChange = () => {
-      initAuth()
-    }
-    
-    const handleLogout = () => {
-      setUser(null)
     }
 
-    window.addEventListener('storage', handleStorageChange)
-    window.addEventListener('auth:logout', handleLogout)
-    
-    return () => {
-      window.removeEventListener('storage', handleStorageChange)
-      window.removeEventListener('auth:logout', handleLogout)
+    initAuth();
+
+    // Listen for auth changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const signIn = async (email, password) => {
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      throw new Error(error.message);
     }
-  }, [])
 
-  const login = async (email, password) => {
-    const data = await api.login(email, password)
-    setUser(data.user)
-    return data
-  }
+    return data;
+  };
 
-  const register = async (email, username, password, confirmPassword) => {
-    const data = await api.register(email, username, password, confirmPassword)
-    setUser(data.user)
-    return data
-  }
+  const signUp = async (email, password, username) => {
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        data: {
+          username,
+        },
+      },
+    });
 
-  const logout = () => {
-    api.logout()
-    setUser(null)
-  }
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return data;
+  };
+
+  const signOut = async () => {
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      console.error("Error signing out:", error);
+    }
+    setUser(null);
+    setSession(null);
+  };
 
   const value = {
     user,
+    session,
     loading,
-    isAuthenticated: checkToken(),
-    login,
-    register,
-    logout
-  }
+    isAuthenticated: !!session,
+    signIn,
+    signUp,
+    signOut,
+  };
 
   return (
     <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
-  )
+  );
 }
 
 export function useAuth() {
-  const context = useContext(AuthContext)
+  const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider')
+    throw new Error("useAuth must be used within an AuthProvider");
   }
-  return context
+  return context;
 }
+
+export default AuthContext;
