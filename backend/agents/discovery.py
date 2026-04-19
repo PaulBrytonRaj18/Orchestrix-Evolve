@@ -4,8 +4,11 @@ Research Discovery Agent - Queries Semantic Scholar, arXiv, and OpenAlex APIs.
 
 import asyncio
 import logging
+import math
+import os
 import re
-from typing import Dict, List, Optional
+from collections import Counter
+from typing import Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 import httpx
@@ -17,13 +20,81 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# API Endpoints
-SEMANTIC_SCHOLAR_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
-ARXIV_URL = "https://export.arxiv.org/api/query"
-OPENALEX_URL = "https://api.openalex.org/works"
+# API Endpoints - configurable via environment variables
+SEMANTIC_SCHOLAR_URL = os.getenv("SEMANTIC_SCHOLAR_URL", "https://api.semanticscholar.org/graph/v1/paper/search")
+ARXIV_URL = os.getenv("ARXIV_URL", "https://export.arxiv.org/api/query")
+OPENALEX_URL = os.getenv("OPENALEX_URL", "https://api.openalex.org/works")
 
-DEFAULT_LIMIT = 20
+DEFAULT_LIMIT = 50  # Fetch more to rank and select top 20
 REQUEST_TIMEOUT = 30.0
+
+VENUE_TIERS = {
+    # Top ML/AI conferences (Tier 1 - 1.0)
+    "neurips": 1.0,
+    "nips": 1.0,
+    "neural information processing systems": 1.0,
+    "icml": 1.0,
+    "international conference on machine learning": 1.0,
+    "iclr": 1.0,
+    "international conference on learning representations": 1.0,
+    "cvpr": 1.0,
+    "computer vision and pattern recognition": 1.0,
+    "iccv": 1.0,
+    "international conference on computer vision": 1.0,
+    "eccv": 1.0,
+    "european conference on computer vision": 1.0,
+    "aaai": 1.0,
+    "association for the advancement of artificial intelligence": 1.0,
+    "ijcai": 1.0,
+    "international joint conference on artificial intelligence": 1.0,
+    "acl": 1.0,
+    "association for computational linguistics": 1.0,
+    "emnlp": 1.0,
+    "empirical methods in natural language processing": 1.0,
+    "naacl": 1.0,
+    "north american chapter of the acl": 1.0,
+    "coling": 1.0,
+    "computational linguistics": 1.0,
+    "arxiv": 0.5,
+    
+    # Top journals (Tier 1 - 1.0)
+    "nature": 1.0,
+    "science": 1.0,
+    "cell": 1.0,
+    "jmlr": 1.0,
+    "journal of machine learning research": 1.0,
+    "pami": 1.0,
+    "pattern analysis and machine intelligence": 1.0,
+    "tnnls": 0.9,
+    "neural networks and learning systems": 0.9,
+    "tcbb": 0.8,
+    "computational biology and bioinformatics": 0.8,
+    
+    # Well-regarded venues (Tier 2 - 0.7)
+    "iros": 0.7,
+    "intelligent robots and systems": 0.7,
+    "robotics": 0.7,
+    "accv": 0.7,
+    "asian conference on computer vision": 0.7,
+    "wacv": 0.7,
+    "winter conference on applications of computer vision": 0.7,
+    "icra": 0.7,
+    "robotics and automation": 0.7,
+    "aistats": 0.7,
+    "artificial intelligence and statistics": 0.7,
+    "uai": 0.7,
+    "uncertainty in artificial intelligence": 0.7,
+    "alt": 0.7,
+    "algorithmic learning theory": 0.7,
+    
+    # Other reputable sources (Tier 3 - 0.5)
+    "bioinformatics": 0.6,
+    "plos": 0.5,
+    "ieee": 0.6,
+    "acm": 0.6,
+    "springer": 0.5,
+    "elsevier": 0.5,
+}
 
 
 def decode_inverted_index(inverted_index: Optional[Dict]) -> str:
@@ -49,6 +120,107 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
+def compute_semantic_similarity(query: str, papers: List[Dict]) -> List[Dict]:
+    """Compute semantic similarity between query and paper titles/abstracts using manual TF-IDF."""
+    if not papers:
+        return papers
+    
+    query_normalized = normalize_text(query)
+    query_words = query_normalized.split()
+    
+    stop_words = {"the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+                  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+                  "should", "may", "might", "must", "shall", "can", "need", "dare",
+                  "ought", "used", "to", "of", "in", "for", "on", "with", "at", "by",
+                  "from", "as", "into", "through", "during", "before", "after",
+                  "above", "below", "between", "under", "again", "further", "then",
+                  "once", "here", "there", "when", "where", "why", "how", "all", "each",
+                  "few", "more", "most", "other", "some", "such", "no", "nor", "not",
+                  "only", "own", "same", "so", "than", "too", "very", "s", "t", "just",
+                  "don", "now", "and", "but", "or", "because", "until", "while", "if",
+                  "this", "that", "these", "those", "it", "its", "they", "their", "them",
+                  "what", "which", "who", "whom", "we", "you", "he", "she", "my", "your",
+                  "his", "her", "our"}
+    
+    def tokenize(text: str) -> List[str]:
+        words = normalize_text(text).split()
+        return [w for w in words if w not in stop_words and len(w) > 1]
+    
+    # Build vocabulary from all documents
+    all_docs = [query_normalized]
+    for paper in papers:
+        title = normalize_text(paper.get("title", ""))
+        abstract = normalize_text(paper.get("abstract", "")[:1000])
+        all_docs.append(f"{title} {abstract}")
+    
+    # Count word frequencies
+    word_counts = Counter()
+    for doc in all_docs:
+        words = tokenize(doc)
+        word_counts.update(words)
+    
+    # Get top N features
+    vocab = [word for word, _ in word_counts.most_common(1000)]
+    word_to_idx = {word: i for i, word in enumerate(vocab)}
+    
+    # Compute TF-IDF vectors
+    n_docs = len(all_docs)
+    doc_vectors = []
+    
+    for doc_idx, doc in enumerate(all_docs):
+        words = tokenize(doc)
+        doc_word_counts = Counter(words)
+        
+        tf = {}
+        for word, count in doc_word_counts.items():
+            if word in word_to_idx:
+                tf[word] = count / len(words) if words else 0
+        
+        idf = {}
+        for word in word_to_idx:
+            doc_count = sum(1 for d in all_docs if word in tokenize(d))
+            idf[word] = math.log(n_docs / (1 + doc_count)) + 1
+        
+        vector = [0.0] * len(vocab)
+        for word, tf_val in tf.items():
+            idx = word_to_idx[word]
+            vector[idx] = tf_val * idf[word]
+        
+        doc_vectors.append(vector)
+    
+    # Normalize vectors
+    def normalize(v):
+        magnitude = math.sqrt(sum(x * x for x in v))
+        if magnitude == 0:
+            return v
+        return [x / magnitude for x in v]
+    
+    query_vec = normalize(doc_vectors[0])
+    paper_vectors = [normalize(v) for v in doc_vectors[1:]]
+    
+    # Compute cosine similarity
+    for i, paper in enumerate(papers):
+        paper_vec = paper_vectors[i]
+        similarity = sum(q * p for q, p in zip(query_vec, paper_vec))
+        paper["semantic_score"] = float(similarity)
+    
+    return papers
+
+
+def get_venue_quality(venue: str) -> float:
+    """Get venue quality score based on known venues."""
+    if not venue:
+        return 0.3
+    
+    venue_lower = venue.lower()
+    
+    for key, score in VENUE_TIERS.items():
+        if key in venue_lower:
+            return score
+    
+    return 0.3  # Default for unknown venues
+
+
 def compute_similarity(title1: str, title2: str) -> float:
     """Jaccard similarity between two titles."""
     words1 = set(normalize_text(title1).split())
@@ -68,26 +240,26 @@ def compute_relevance_score(
     min_year: int,
     max_year: int,
 ) -> float:
-    """Compute relevance score based on citations, year, and keyword matching."""
+    """Compute relevance score based on multiple factors with weighted scoring."""
     score = 0.0
 
-    # Citation score (40% weight)
+    # Citation score (30% weight) - popularity indicator
     citations = paper.get("citation_count") or 0
     if max_citations > min_citations:
         citation_score = (citations - min_citations) / (max_citations - min_citations)
     else:
         citation_score = 0.5
-    score += 0.40 * citation_score
+    score += 0.30 * citation_score
 
-    # Year score (30% weight)
+    # Year score (15% weight) - recency
     year = paper.get("year") or min_year
     if max_year > min_year:
         year_score = (year - min_year) / (max_year - min_year)
     else:
         year_score = 0.5
-    score += 0.30 * year_score
+    score += 0.15 * year_score
 
-    # Keyword matching (30% weight) - no stopwords
+    # Keyword matching (20% weight) - exact term overlap
     query_words = normalize_text(query).split()
     if query_words:
         title_abstract = normalize_text(
@@ -95,7 +267,16 @@ def compute_relevance_score(
         )
         matches = sum(1 for kw in query_words if kw in title_abstract)
         keyword_score = matches / len(query_words)
-        score += 0.30 * keyword_score
+        score += 0.20 * keyword_score
+
+    # Semantic similarity (25% weight) - TF-IDF based
+    semantic_score = paper.get("semantic_score", 0.5)
+    score += 0.25 * semantic_score
+
+    # Venue quality (10% weight) - publication venue reputation
+    venue = paper.get("venue", "")
+    venue_score = get_venue_quality(venue)
+    score += 0.10 * venue_score
 
     return round(score, 4)
 
@@ -343,12 +524,19 @@ async def query_openalex(
         return []
 
 
-async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT) -> List[Dict]:
+async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT, return_top: int = 20) -> List[Dict]:
     """Main discovery function - queries all sources in parallel.
 
     Gracefully handles API failures by continuing with results from working sources.
+    Fetches more papers than needed to rank and return the most relevant top papers.
+    
+    Args:
+        query: Search query string
+        page: Page offset for API calls
+        limit: Number of papers to fetch per source (default 50)
+        return_top: Number of top papers to return (default 20)
     """
-    logger.info(f"Discovery: query='{query}', page={page}, limit={limit}")
+    logger.info(f"Discovery: query='{query}', page={page}, limit={limit}, return_top={return_top}")
 
     tasks = [
         query_semantic_scholar(query, page, limit),
@@ -387,6 +575,11 @@ async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT) -> List[Dic
         logger.error("All discovery sources failed - no papers available")
         return []
 
+    # Compute semantic similarity using TF-IDF (before dedup for better coverage)
+    all_papers = compute_semantic_similarity(query, all_papers)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"Computed semantic scores for {len(all_papers)} papers")
+
     # Deduplicate
     all_papers = deduplicate_papers(all_papers)
     if logger.isEnabledFor(logging.DEBUG):
@@ -410,11 +603,14 @@ async def run(query: str, page: int = 0, limit: int = DEFAULT_LIMIT) -> List[Dic
 
     all_papers.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
 
+    # Return top papers only
+    top_papers = all_papers[:return_top]
+    
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(
-            f"Final: {len(all_papers)} papers from {successful_sources} (failed: {failed_sources})"
+            f"Final: {len(top_papers)} papers (from {len(all_papers)} ranked) from {successful_sources} (failed: {failed_sources})"
         )
-    return all_papers
+    return top_papers
 
 
 if __name__ == "__main__":

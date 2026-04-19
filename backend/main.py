@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import or_, func
 from typing import List, Optional
@@ -113,6 +113,16 @@ async def lifespan(app: FastAPI):
 
 # Update app with lifespan
 app.router.lifespan_context = lifespan
+
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error. Please check logs or try again."}
+    )
 
 
 @app.get("/health", response_model=HealthResponse, tags=["Health"])

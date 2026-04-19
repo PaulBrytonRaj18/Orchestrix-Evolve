@@ -107,7 +107,8 @@ else:
     from sqlalchemy.orm import sessionmaker, Session, declarative_base
 
     if not DATABASE_URL:
-        DATABASE_URL = "sqlite:///./orchestrix.db"
+        sqlite_path = os.getenv("SQLITE_DB_PATH", "./orchestrix.db")
+        DATABASE_URL = f"sqlite:///{sqlite_path}"
 
     engine = create_engine(
         DATABASE_URL,
