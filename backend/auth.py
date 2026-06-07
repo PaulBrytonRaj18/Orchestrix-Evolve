@@ -80,33 +80,33 @@ async def verify_supabase_token(
         )
 
     try:
-        # Try JWKS verification first (recommended for production)
         jwks_client = _get_jwks_client()
+        if not jwks_client:
+            logger.error("JWKS client not configured — cannot verify JWT")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Authentication service misconfigured",
+            )
 
-        if jwks_client:
-            try:
-                signing_key = jwks_client.get_signing_key_from_jwt(token)
-                payload = jwt.decode(
-                    token,
-                    signing_key.key,
-                    algorithms=["RS256", "ES256"],
-                    issuer=ISSUER,
-                    options={
-                        "verify_aud": False,  # Audience claim varies
-                        "verify_exp": True,
-                        "verify_iat": True,
-                    },
-                )
-            except jwt.exceptions.PyJWKClientConnectionError:
-                logger.warning(
-                    "Could not connect to JWKS, falling back to decoded claims only"
-                )
-                # Fall back to decoding without verification (less secure but works offline)
-                payload = jwt.decode(token, options={"verify_signature": False})
-        else:
-            # No JWKS client - decode without verification (dev mode)
-            payload = jwt.decode(token, options={"verify_signature": False})
-            logger.warning("Running without JWT signature verification")
+        try:
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            payload = jwt.decode(
+                token,
+                signing_key.key,
+                algorithms=["RS256", "ES256"],
+                issuer=ISSUER,
+                options={
+                    "verify_aud": False,
+                    "verify_exp": True,
+                    "verify_iat": True,
+                },
+            )
+        except jwt.exceptions.PyJWKClientConnectionError:
+            logger.error("Could not connect to Supabase JWKS endpoint")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service temporarily unavailable",
+            )
 
         user_id = payload.get("sub")
         if not user_id:
@@ -164,29 +164,4 @@ def get_supabase_client():
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 
-# Keep these for backward compatibility (no-op functions)
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Deprecated - password verification now handled by Supabase"""
-    logger.warning("verify_password is deprecated - Supabase handles auth")
-    return False
 
-
-def get_password_hash(password: str) -> str:
-    """Deprecated - password hashing now handled by Supabase"""
-    logger.warning("get_password_hash is deprecated - Supabase handles auth")
-    return ""
-
-
-def create_access_token(data: dict, expires_delta: Optional[int] = None) -> str:
-    """Deprecated - tokens now managed by Supabase"""
-    logger.warning("create_access_token is deprecated - Supabase handles tokens")
-    return ""
-
-
-def decode_token(token: str) -> Optional[dict]:
-    """Deprecated - use verify_supabase_token instead"""
-    logger.warning("decode_token is deprecated - use verify_supabase_token instead")
-    try:
-        return jwt.decode(token, options={"verify_signature": False})
-    except Exception:
-        return None

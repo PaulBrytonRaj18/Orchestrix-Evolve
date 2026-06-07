@@ -1,16 +1,17 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { api } from '../api.js'
+import { api } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { Map, FileText, Plus, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react'
+import type { Session, RoadmapResponse } from '../types/api'
 
 function Roadmap() {
   const navigate = useNavigate()
-  const [sessions, setSessions] = useState([])
+  const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
-  const [roadmaps, setRoadmaps] = useState({})
-  const [expandedRoadmap, setExpandedRoadmap] = useState(null)
-  const [generatingId, setGeneratingId] = useState(null)
+  const [roadmaps, setRoadmaps] = useState<Record<string, RoadmapResponse | null>>({})
+  const [expandedRoadmap, setExpandedRoadmap] = useState<string | null>(null)
+  const [generatingId, setGeneratingId] = useState<string | null>(null)
 
   useEffect(() => {
     fetchSessionsAndRoadmaps()
@@ -32,7 +33,7 @@ function Roadmap() {
       })
       
       const roadmapResults = await Promise.all(roadmapPromises)
-      const roadmapMap = Object.assign({}, ...roadmapResults)
+      const roadmapMap: Record<string, RoadmapResponse | null> = Object.assign({}, ...roadmapResults)
       setRoadmaps(roadmapMap)
     } catch (error) {
       console.error('Error fetching sessions:', error)
@@ -41,7 +42,7 @@ function Roadmap() {
     }
   }
 
-  const handleGenerateRoadmap = async (sessionId) => {
+  const handleGenerateRoadmap = async (sessionId: string) => {
     setGeneratingId(sessionId)
     try {
       await api.generateRoadmap(sessionId)
@@ -54,11 +55,9 @@ function Roadmap() {
     }
   }
 
-  const handleViewSession = (sessionId) => {
+  const handleViewSession = (sessionId: string) => {
     navigate(`/dashboard/${sessionId}`)
   }
-
-  const sessionsWithRoadmaps = sessions.filter(s => roadmaps[s.id])
 
   if (loading) {
     return (

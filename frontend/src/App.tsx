@@ -1,20 +1,20 @@
-import { React, useEffect } from 'react'
+import React from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { AuthProvider, useAuth } from './contexts/AuthContext.jsx'
-import { ThemeProvider, useTheme } from './contexts/ThemeContext.jsx'
-import ErrorBoundary from './components/ErrorBoundary.jsx'
-import Search from './pages/Search.jsx'
-import Dashboard from './pages/Dashboard.jsx'
-import SessionCompare from './pages/SessionCompare.jsx'
-import Roadmap from './pages/Roadmap.jsx'
-import DigestManagement from './components/DigestManagement.jsx'
-import Login from './pages/Login.jsx'
-import Register from './pages/Register.jsx'
-import { Sun, Moon, SearchIcon, LayoutDashboard, Map, GitCompare, Mail, LogOut, User } from 'lucide-react'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { ThemeProvider, useTheme } from './contexts/ThemeContext'
+import ErrorBoundary from './components/ErrorBoundary'
+import Search from './pages/Search'
+import Dashboard from './pages/Dashboard'
+import SessionCompare from './pages/SessionCompare'
+import Roadmap from './pages/Roadmap'
+import DigestManagement from './components/DigestManagement'
+import Login from './pages/Login'
+import Register from './pages/Register'
+import { Sun, Moon, SearchIcon, LayoutDashboard, Map, GitCompare, Mail, LogOut } from 'lucide-react'
 import './app.css'
 
-function ProtectedRoute({ children }) {
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth()
   
   if (loading) {
@@ -29,10 +29,10 @@ function ProtectedRoute({ children }) {
     return <Navigate to="/login" replace />
   }
   
-  return children
+  return <>{children}</>
 }
 
-function GuestRoute({ children }) {
+function GuestRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth()
   
   if (loading) {
@@ -47,10 +47,16 @@ function GuestRoute({ children }) {
     return <Navigate to="/" replace />
   }
   
-  return children
+  return <>{children}</>
 }
 
-const navItems = [
+interface NavItem {
+  path: string;
+  label: string;
+  icon: React.ElementType;
+}
+
+const navItems: NavItem[] = [
   { path: '/', label: 'Search', icon: SearchIcon },
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/roadmap', label: 'Roadmap', icon: Map },
@@ -60,10 +66,10 @@ const navItems = [
 
 function NavContent() {
   const location = useLocation()
-  const { user, logout, isAuthenticated } = useAuth()
+  const { user, signOut, isAuthenticated } = useAuth()
   const { theme, toggleTheme } = useTheme()
 
-  const isActiveRoute = (path) => {
+  const isActiveRoute = (path: string): boolean => {
     if (path === '/') return location.pathname === '/'
     return location.pathname.startsWith(path)
   }
@@ -113,7 +119,7 @@ function NavContent() {
             </button>
             
             {isAuthenticated ? (
-              <div className="user-menu" onClick={logout}>
+              <div className="user-menu" onClick={signOut}>
                 <div className="user-avatar">
                   {user?.username?.[0]?.toUpperCase() || user?.email?.[0]?.toUpperCase() || 'U'}
                 </div>

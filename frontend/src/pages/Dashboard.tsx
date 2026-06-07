@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { api } from '../api.js'
-import SessionSidebar from '../components/SessionSidebar.jsx'
-import PaperCard from '../components/PaperCard.jsx'
-import AnalysisCharts from '../components/AnalysisCharts.jsx'
-import CitationPanel from '../components/CitationPanel.jsx'
-import SummaryPanel from '../components/SummaryPanel.jsx'
-import ConflictsPanel from '../components/ConflictsPanel.jsx'
+import { api } from '../api'
+import SessionSidebar from '../components/SessionSidebar'
+import PaperCard from '../components/PaperCard'
+import AnalysisCharts from '../components/AnalysisCharts'
+import CitationPanel from '../components/CitationPanel'
+import SummaryPanel from '../components/SummaryPanel'
+import ConflictsPanel from '../components/ConflictsPanel'
 import { FileText, BarChart3, Link2, Sparkles, AlertTriangle, Plus, Clock, Loader2 } from 'lucide-react'
+import type { Session, SessionFull, AnalysisData } from '../types/api'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -23,18 +24,18 @@ const itemVariants = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.3, ease: 'easeOut' }
+    transition: { duration: 0.3, ease: 'easeOut' as const }
   }
 }
 
 function Dashboard() {
   const navigate = useNavigate()
-  const { sessionId: urlSessionId } = useParams()
-  const [sessions, setSessions] = useState([])
-  const [currentSessionId, setCurrentSessionId] = useState(urlSessionId || null)
-  const [currentSession, setCurrentSession] = useState(null)
+  const { sessionId: urlSessionId } = useParams<{ sessionId: string }>()
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId || null)
+  const [currentSession, setCurrentSession] = useState<SessionFull | null>(null)
   const [activeTab, setActiveTab] = useState('papers')
-  const [debouncedNoteChanges, setDebouncedNoteChanges] = useState({})
+  const [debouncedNoteChanges, setDebouncedNoteChanges] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(false)
 
   const loadSessions = useCallback(async () => {
@@ -46,7 +47,7 @@ function Dashboard() {
     }
   }, [])
 
-  const loadSession = useCallback(async (id) => {
+  const loadSession = useCallback(async (id: string) => {
     setIsLoading(true)
     try {
       const data = await api.getSession(id)
@@ -71,7 +72,7 @@ function Dashboard() {
   }, [currentSessionId, loadSession])
 
   useEffect(() => {
-    const timeoutIds = Object.entries(debouncedNoteChanges).map(([paperId, content]) => {
+    const timeoutIds: ReturnType<typeof setTimeout>[] = Object.entries(debouncedNoteChanges).map(([paperId, content]) => {
       return setTimeout(async () => {
         try {
           await api.updateNote(paperId, content)
@@ -83,16 +84,16 @@ function Dashboard() {
     return () => timeoutIds.forEach(id => clearTimeout(id))
   }, [debouncedNoteChanges])
 
-  const handleSelectSession = (id) => {
+  const handleSelectSession = (id: string) => {
     setCurrentSessionId(id)
     navigate(`/dashboard/${id}`)
   }
 
-  const handleNoteChange = (paperId, content) => {
+  const handleNoteChange = (paperId: string, content: string) => {
     setDebouncedNoteChanges(prev => ({ ...prev, [paperId]: content }))
   }
 
-  const handleSynthesize = async (paperIds) => {
+  const handleSynthesize = async (paperIds: string[]) => {
     if (!currentSessionId || paperIds.length < 2) return
     try {
       await api.synthesize(currentSessionId, paperIds)
@@ -101,12 +102,9 @@ function Dashboard() {
     }
   }
 
-  const analysisMap = currentSession?.analyses?.reduce((acc, a) => {
-    acc[a.analysis_type] = a.data_json
-    return acc
-  }, {}) || null
+  const analysisData: AnalysisData | null = currentSession?.analyses?.[0]?.data_json || null
 
-  const tabs = [
+  const tabs: Array<{ id: string; label: string; icon: React.ElementType }> = [
     { id: 'papers', label: 'Papers', icon: FileText },
     { id: 'analysis', label: 'Analysis', icon: BarChart3 },
     { id: 'citations', label: 'Citations', icon: Link2 },
@@ -114,10 +112,10 @@ function Dashboard() {
     { id: 'conflicts', label: 'Conflicts', icon: AlertTriangle }
   ]
 
-  const formatDate = (dateString) => {
+  const formatDate = (dateString: string): string => {
     const date = new Date(dateString)
     const now = new Date()
-    const diff = now - date
+    const diff = now.getTime() - date.getTime()
     const days = Math.floor(diff / (1000 * 60 * 60 * 24))
     
     if (days === 0) return 'Today'
@@ -247,9 +245,9 @@ function Dashboard() {
                     )}
                   </motion.div>
                 )}
-                {activeTab === 'analysis' && <AnalysisCharts analysis={analysisMap} />}
-                {activeTab === 'citations' && <CitationPanel papers={currentSession.papers} sessionId={currentSessionId} />}
-                {activeTab === 'summary' && <SummaryPanel papers={currentSession.papers} sessionId={currentSessionId} onSynthesize={handleSynthesize} />}
+                {activeTab === 'analysis' && <AnalysisCharts analysis={analysisData} />}
+                {activeTab === 'citations' && <CitationPanel papers={currentSession.papers} />}
+                {activeTab === 'summary' && <SummaryPanel papers={currentSession.papers} onSynthesize={handleSynthesize} />}
                 {activeTab === 'conflicts' && currentSessionId && <ConflictsPanel sessionId={currentSessionId} />}
               </motion.div>
             </AnimatePresence>

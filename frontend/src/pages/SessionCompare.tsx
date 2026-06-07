@@ -1,13 +1,20 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { api } from '../api.js'
+import { api } from '../api'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
-import { GitCompare, FileText, Loader2 } from 'lucide-react'
+import { GitCompare, Loader2 } from 'lucide-react'
+import type { Session, SessionFull } from '../types/api'
+
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{ name: string; value: number | string; color: string }>;
+  label?: string;
+}
 
 function SessionCompare() {
-  const [sessions, setSessions] = useState([])
-  const [sessionA, setSessionA] = useState(null)
-  const [sessionB, setSessionB] = useState(null)
+  const [sessions, setSessions] = useState<Session[]>([])
+  const [sessionA, setSessionA] = useState<SessionFull | null>(null)
+  const [sessionB, setSessionB] = useState<SessionFull | null>(null)
   const [selectedA, setSelectedA] = useState('')
   const [selectedB, setSelectedB] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -21,7 +28,7 @@ function SessionCompare() {
     }
   }, [])
 
-  const loadSession = useCallback(async (id, setter) => {
+  const loadSession = useCallback(async (id: string, setter: React.Dispatch<React.SetStateAction<SessionFull | null>>) => {
     setIsLoading(true)
     try {
       const data = await api.getSession(id)
@@ -53,20 +60,20 @@ function SessionCompare() {
     }
   }, [selectedB, loadSession])
 
-  const getAnalysisMap = (session) => {
+  const getAnalysisMap = (session: SessionFull | null): Record<string, unknown> => {
     if (!session?.analyses) return {}
-    return session.analyses.reduce((acc, a) => {
+    return session.analyses.reduce<Record<string, unknown>>((acc, a) => {
       acc[a.analysis_type] = a.data_json
       return acc
     }, {})
   }
 
-  const mergePublicationTrends = () => {
-    const analysisA = getAnalysisMap(sessionA)
-    const analysisB = getAnalysisMap(sessionB)
-    const trendA = analysisA.publication_trend || []
-    const trendB = analysisB.publication_trend || []
-    const years = new Set()
+  const mergePublicationTrends = (): Array<{ year: number; [key: string]: number | string }> => {
+    const analysisA = getAnalysisMap(sessionA) as Record<string, { year: number; count: number }[]>
+    const analysisB = getAnalysisMap(sessionB) as Record<string, { year: number; count: number }[]>
+    const trendA: { year: number; count: number }[] = (analysisA.publication_trend as { year: number; count: number }[]) || []
+    const trendB: { year: number; count: number }[] = (analysisB.publication_trend as { year: number; count: number }[]) || []
+    const years = new Set<number>()
     trendA.forEach(t => years.add(t.year))
     trendB.forEach(t => years.add(t.year))
 
@@ -77,24 +84,24 @@ function SessionCompare() {
     }))
   }
 
-  const getKeywordComparison = () => {
-    const analysisA = getAnalysisMap(sessionA)
-    const analysisB = getAnalysisMap(sessionB)
-    const keywordsA = (analysisA.keyword_frequency || []).slice(0, 8).map(k => k.word)
-    const keywordsB = (analysisB.keyword_frequency || []).slice(0, 8).map(k => k.word)
+  const getKeywordComparison = (): { uniqueA: string[]; uniqueB: string[]; shared: string[] } => {
+    const analysisA = getAnalysisMap(sessionA) as Record<string, { word: string; count: number }[]>
+    const analysisB = getAnalysisMap(sessionB) as Record<string, { word: string; count: number }[]>
+    const keywordsA: string[] = ((analysisA.keyword_frequency as { word: string; count: number }[]) || []).slice(0, 8).map(k => k.word)
+    const keywordsB: string[] = ((analysisB.keyword_frequency as { word: string; count: number }[]) || []).slice(0, 8).map(k => k.word)
     const uniqueA = keywordsA.filter(w => !keywordsB.includes(w))
     const uniqueB = keywordsB.filter(w => !keywordsA.includes(w))
     const shared = keywordsA.filter(w => keywordsB.includes(w))
     return { uniqueA, uniqueB, shared }
   }
 
-  const getCommonPapers = () => {
+  const getCommonPapers = (): number => {
     if (!sessionA?.papers || !sessionB?.papers) return 0
     const idsA = new Set(sessionA.papers.map(p => p.external_id))
     return sessionB.papers.filter(p => idsA.has(p.external_id)).length
   }
 
-  const CustomTooltip = ({ active, payload, label }) => {
+  const CustomTooltip: React.FC<CustomTooltipProps> = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       return (
         <div className="card" style={{ padding: 'var(--space-3)', fontSize: 'var(--text-sm)' }}>

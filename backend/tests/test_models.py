@@ -18,7 +18,6 @@ from models import (
     DigestRun,
     Roadmap,
     generate_uuid,
-    DigestFrequency,
 )
 
 
@@ -36,19 +35,6 @@ class TestGenerateUuid:
         values = [generate_uuid() for _ in range(100)]
         assert len(set(values)) == 100
 
-
-class TestDigestFrequency:
-    def test_has_daily(self):
-        assert DigestFrequency.DAILY.value == "daily"
-
-    def test_has_weekly(self):
-        assert DigestFrequency.WEEKLY.value == "weekly"
-
-    def test_has_biweekly(self):
-        assert DigestFrequency.BIWEEKLY.value == "biweekly"
-
-    def test_has_monthly(self):
-        assert DigestFrequency.MONTHLY.value == "monthly"
 
 
 class TestUserModel:

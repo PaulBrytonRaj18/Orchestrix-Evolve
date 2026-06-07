@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { api } from '../api.js'
-import AgentTraceLog from '../components/AgentTraceLog.jsx'
-import PaperCard from '../components/PaperCard.jsx'
-import AnalysisCharts from '../components/AnalysisCharts.jsx'
-import CitationPanel from '../components/CitationPanel.jsx'
-import SummaryPanel from '../components/SummaryPanel.jsx'
-import ConflictsPanel from '../components/ConflictsPanel.jsx'
-import RoadmapPanel from '../components/RoadmapPanel.jsx'
+import { api } from '../api'
+import AgentTraceLog from '../components/AgentTraceLog'
+import PaperCard from '../components/PaperCard'
+import AnalysisCharts from '../components/AnalysisCharts'
+import CitationPanel from '../components/CitationPanel'
+import SummaryPanel from '../components/SummaryPanel'
+import ConflictsPanel from '../components/ConflictsPanel'
+import RoadmapPanel from '../components/RoadmapPanel'
 import { Search as SearchIcon, FileText, BarChart3, Link2, Sparkles, AlertTriangle, Map, Loader2, ArrowRight } from 'lucide-react'
+import type { AgentTrace, PaperWithDetails, AnalysisData, RoadmapResponse } from '../types/api'
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -24,28 +24,27 @@ const itemVariants = {
   visible: {
     opacity: 1,
     y: 0,
-    transition: { duration: 0.3, ease: 'easeOut' }
+    transition: { duration: 0.3, ease: 'easeOut' as const }
   }
 }
 
 function Search() {
-  const navigate = useNavigate()
-  const inputRef = useRef(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [isSearching, setIsSearching] = useState(false)
-  const [currentSessionId, setCurrentSessionId] = useState(null)
-  const [trace, setTrace] = useState([])
-  const [papers, setPapers] = useState([])
-  const [analysis, setAnalysis] = useState(null)
-  const [roadmap, setRoadmap] = useState(null)
-  const [activeTab, setActiveTab] = useState('papers')
-  const [pollingInterval, setPollingInterval] = useState(null)
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null)
+  const [trace, setTrace] = useState<AgentTrace[]>([])
+  const [papers, setPapers] = useState<PaperWithDetails[]>([])
+  const [analysis, setAnalysis] = useState<AnalysisData | null>(null)
+  const [roadmap, setRoadmap] = useState<RoadmapResponse | null>(null)
+  const [activeTab, setActiveTab] = useState<string>('papers')
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
 
-  const handleSearch = async (e) => {
+  const handleSearch = async (e?: React.FormEvent) => {
     e?.preventDefault()
     if (!query.trim()) return
 
@@ -86,27 +85,32 @@ function Search() {
 
       const doneEntry = trace.find(e => e.agent === 'Citations & Summaries' && e.status === 'done')
       if (doneEntry) {
-        clearInterval(pollingInterval)
-        setPollingInterval(null)
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current)
+          pollingRef.current = null
+        }
       }
     } catch (error) {
       console.error('Polling error:', error)
     }
-  }, [currentSessionId, pollingInterval, trace])
+  }, [currentSessionId, trace])
 
   useEffect(() => {
     if (currentSessionId && isSearching) {
       const interval = setInterval(pollForUpdates, 1500)
-      setPollingInterval(interval)
+      pollingRef.current = interval
       return () => clearInterval(interval)
     }
   }, [currentSessionId, isSearching, pollForUpdates])
 
   useEffect(() => {
     return () => {
-      if (pollingInterval) clearInterval(pollingInterval)
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current)
+        pollingRef.current = null
+      }
     }
-  }, [pollingInterval])
+  }, [])
 
   useEffect(() => {
     const fetchRoadmap = async () => {
@@ -122,27 +126,26 @@ function Search() {
     fetchRoadmap()
   }, [activeTab, currentSessionId, roadmap])
 
-  const handleCopyCitation = (citation) => {
+  const handleCopyCitation = (citation: string) => {
     navigator.clipboard.writeText(citation)
   }
 
-  const handleSynthesize = async (paperIds) => {
+  const handleSynthesize = async (paperIds: string[]) => {
     if (!currentSessionId || paperIds.length < 2) return
     try {
-      const result = await api.synthesize(currentSessionId, paperIds)
+      await api.synthesize(currentSessionId, paperIds)
     } catch (error) {
       console.error('Synthesis error:', error)
     }
   }
 
-  const handleRoadmapQueryClick = async (query) => {
+  const handleRoadmapQueryClick = async (query: string) => {
     setIsSearching(true)
     try {
-      const response = await fetch(`/sessions/${currentSessionId}/roadmap/query?query=${encodeURIComponent(query)}`, { method: 'POST' })
-      const data = await response.json()
-      if (data.orchestration_result) {
-        setPapers(prev => [...prev, ...(data.orchestration_result.papers || [])])
-        setAnalysis(data.orchestration_result.analysis)
+      const result = await api.executeRoadmapQuery(currentSessionId!, query)
+      if (result.orchestration_result) {
+        setPapers(prev => [...prev, ...(result.orchestration_result.papers || [])])
+        setAnalysis(result.orchestration_result.analysis)
       }
     } catch (error) {
       console.error('Error executing roadmap query:', error)
@@ -151,7 +154,7 @@ function Search() {
     }
   }
 
-  const tabs = [
+  const tabs: Array<{ id: string; label: string; icon: React.ElementType }> = [
     { id: 'papers', label: 'Papers', icon: FileText },
     { id: 'analysis', label: 'Analysis', icon: BarChart3 },
     { id: 'citations', label: 'Citations', icon: Link2 },
@@ -160,7 +163,7 @@ function Search() {
     { id: 'roadmap', label: 'Roadmap', icon: Map }
   ]
 
-  const suggestions = [
+  const suggestions: string[] = [
     'Machine learning transformers',
     'Quantum computing algorithms',
     'CRISPR gene editing',
@@ -336,8 +339,8 @@ function Search() {
                 </motion.div>
               )}
               {activeTab === 'analysis' && <AnalysisCharts analysis={analysis} />}
-              {activeTab === 'citations' && <CitationPanel papers={papers} sessionId={currentSessionId} />}
-              {activeTab === 'summary' && <SummaryPanel papers={papers} sessionId={currentSessionId} onSynthesize={handleSynthesize} />}
+              {activeTab === 'citations' && <CitationPanel papers={papers} />}
+              {activeTab === 'summary' && <SummaryPanel papers={papers} onSynthesize={handleSynthesize} />}
               {activeTab === 'conflicts' && currentSessionId && <ConflictsPanel sessionId={currentSessionId} />}
               {activeTab === 'roadmap' && currentSessionId && (
                 <RoadmapPanel

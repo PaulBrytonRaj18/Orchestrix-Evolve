@@ -20,31 +20,32 @@ class DigestScheduler:
     _instance: Optional["DigestScheduler"] = None
     _scheduler: Optional[AsyncIOScheduler] = None
     _lock = threading.Lock()
+    _running_jobs: Dict[str, str]
 
-    def __new__(cls):
+    def __new__(cls) -> "DigestScheduler":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if self._scheduler is None:
             self._scheduler = AsyncIOScheduler()
-            self._running_jobs: Dict[str, str] = {}
+            self._running_jobs = {}
 
-    def start(self):
-        if not self._scheduler.running:
+    def start(self) -> None:
+        if self._scheduler and not self._scheduler.running:
             self._scheduler.start()
             logger.info("Digest scheduler started")
             self._load_active_digests()
 
-    def stop(self):
-        if self._scheduler.running:
+    def stop(self) -> None:
+        if self._scheduler and self._scheduler.running:
             self._scheduler.shutdown(wait=False)
             logger.info("Digest scheduler stopped")
 
-    def _load_active_digests(self):
+    def _load_active_digests(self) -> None:
         with get_db_context() as db:
             try:
                 active_digests = (
@@ -60,7 +61,9 @@ class DigestScheduler:
             except Exception as e:
                 logger.error(f"Error loading active digests: {e}")
 
-    def add_job(self, digest_id: str, query: str, next_run: datetime):
+    def add_job(self, digest_id: str, query: str, next_run: datetime) -> None:
+        if not self._scheduler:
+            return
         job_id = f"digest_{digest_id}"
 
         if self._scheduler.get_job(job_id):
@@ -83,13 +86,15 @@ class DigestScheduler:
 
         logger.info(f"Scheduled digest job {job_id} for {run_time}")
 
-    def remove_job(self, digest_id: str):
+    def remove_job(self, digest_id: str) -> None:
+        if not self._scheduler:
+            return
         job_id = f"digest_{digest_id}"
         if self._scheduler.get_job(job_id):
             self._scheduler.remove_job(job_id)
             logger.info(f"Removed digest job: {job_id}")
 
-    async def _execute_digest(self, digest_id: str):
+    async def _execute_digest(self, digest_id: str) -> None:
         logger.info(f"Executing digest: {digest_id}")
 
         with get_db_context() as db:
@@ -216,7 +221,9 @@ class DigestScheduler:
                 run.error_message = str(e)
                 db.commit()
 
-    def trigger_manual_run(self, digest_id: str):
+    def trigger_manual_run(self, digest_id: str) -> None:
+        if not self._scheduler:
+            return
         job_id = f"digest_{digest_id}"
 
         if self._scheduler.get_job(job_id):

@@ -22,7 +22,7 @@ STOPWORDS = {
     "research", "method", "methods", "model", "data", "system", "performance",
     "problem", "propose", "proposed", "present", "presented", "provide",
     "provided", "high", "low", "large", "small", "different", "various",
-    "number", "number", "case", "point", "term", "field", "area", "type",
+    "number", "case", "point", "term", "field", "area", "type",
     "level", "group", "et", "al", "ie", "eg", "etc", "vs", "via", "per", "cc",
     "b", "c", "d", "e", "f", "g", "h", "j", "k", "l", "m", "n", "o", "p",
     "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "one", "two", "three",

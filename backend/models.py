@@ -8,25 +8,16 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     Boolean,
-    Enum as SQLEnum,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import uuid
-import enum
 
 from database import Base
 
 
-def generate_uuid():
+def generate_uuid() -> str:
     return str(uuid.uuid4())
-
-
-class DigestFrequency(enum.Enum):
-    DAILY = "daily"
-    WEEKLY = "weekly"
-    BIWEEKLY = "biweekly"
-    MONTHLY = "monthly"
 
 
 class User(Base):

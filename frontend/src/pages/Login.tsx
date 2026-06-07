@@ -1,42 +1,28 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { api } from '../api.js'
-import { useAuth } from '../contexts/AuthContext.jsx'
+import { useAuth } from '../contexts/AuthContext'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 
-function Register() {
+function Login() {
   const navigate = useNavigate()
-  const { register } = useAuth()
+  const { signIn } = useAuth()
   const [email, setEmail] = useState('')
-  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-
-    if (password !== confirmPassword) {
-      setError('Passwords do not match')
-      return
-    }
-
-    if (password.length < 8) {
-      setError('Password must be at least 8 characters')
-      return
-    }
-
     setIsLoading(true)
 
     try {
-      await register(email, username, password, confirmPassword)
+      await signIn(email, password)
       navigate('/')
     } catch (err) {
-      setError(err.message || 'Failed to create account')
+      setError(err instanceof Error ? err.message : 'Invalid email or password')
     } finally {
       setIsLoading(false)
     }
@@ -57,8 +43,8 @@ function Register() {
               <path d="m21 21-4.3-4.3"/>
             </svg>
           </div>
-          <h1 className="auth-title">Create account</h1>
-          <p className="auth-subtitle">Start your research journey with Orchestrix</p>
+          <h1 className="auth-title">Welcome back</h1>
+          <p className="auth-subtitle">Sign in to continue to Orchestrix</p>
         </div>
 
         <form className="auth-form" onSubmit={handleSubmit}>
@@ -88,31 +74,17 @@ function Register() {
           </div>
 
           <div className="form-group">
-            <label className="form-label" htmlFor="username">Username</label>
-            <input
-              id="username"
-              type="text"
-              className="form-input"
-              placeholder="Choose a username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              autoComplete="username"
-            />
-          </div>
-
-          <div className="form-group">
             <label className="form-label" htmlFor="password">Password</label>
             <div style={{ position: 'relative' }}>
               <input
                 id="password"
                 type={showPassword ? 'text' : 'password'}
                 className="form-input"
-                placeholder="Create a password (min. 8 characters)"
+                placeholder="Enter your password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                autoComplete="new-password"
+                autoComplete="current-password"
                 style={{ paddingRight: '44px' }}
               />
               <button
@@ -135,20 +107,6 @@ function Register() {
             </div>
           </div>
 
-          <div className="form-group">
-            <label className="form-label" htmlFor="confirmPassword">Confirm Password</label>
-            <input
-              id="confirmPassword"
-              type={showPassword ? 'text' : 'password'}
-              className="form-input"
-              placeholder="Confirm your password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              required
-              autoComplete="new-password"
-            />
-          </div>
-
           <button
             type="submit"
             className="btn btn-primary btn-lg w-full"
@@ -157,21 +115,21 @@ function Register() {
           >
             {isLoading ? (
               <>
-                <Loader2 size={18} style={{ animation: 'spin 0.8s linear infinite' }} />
-                Creating account...
+                <Loader2 size={18} className="animate-spin" style={{ animation: 'spin 0.8s linear infinite' }} />
+                Signing in...
               </>
             ) : (
-              'Create account'
+              'Sign in'
             )}
           </button>
         </form>
 
         <div className="auth-footer">
-          Already have an account? <Link to="/login" className="auth-link">Sign in</Link>
+          Don't have an account? <Link to="/register" className="auth-link">Create one</Link>
         </div>
       </motion.div>
     </div>
   )
 }
 
-export default Register
+export default Login

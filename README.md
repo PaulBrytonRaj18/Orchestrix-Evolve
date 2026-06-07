@@ -2,6 +2,9 @@
 
 Orchestrix is a full-stack web application that eliminates fragmentation in the academic research workflow through multi-agent AI orchestration. It queries multiple academic databases, performs analysis, generates citations, provides synthesis capabilities, detects conflicts between agent outputs, and supports scheduled research digests.
 
+[![CI](https://github.com/Paul-Bryton-Raj/Orchestrix-Evolve/actions/workflows/ci.yml/badge.svg)](https://github.com/Paul-Bryton-Raj/Orchestrix-Evolve/actions/workflows/ci.yml)
+[![Security Scan](https://github.com/Paul-Bryton-Raj/Orchestrix-Evolve/actions/workflows/security.yml/badge.svg)](https://github.com/Paul-Bryton-Raj/Orchestrix-Evolve/actions/workflows/security.yml)
+
 ## Prerequisites
 
 - Python 3.11+
@@ -67,6 +70,30 @@ The application will be available at:
 - Frontend: http://localhost:5173
 - Backend API: http://localhost:8000
 - API Documentation: http://localhost:8000/docs
+
+### 5. Docker Setup (Optional)
+
+```bash
+# Build and run both services
+docker compose up -d --build
+
+# View logs
+docker compose logs -f
+
+# Stop everything
+docker compose down
+```
+
+## CI/CD
+
+This project uses GitHub Actions for continuous integration and deployment:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| PR Checks | Pull requests | Lint, typecheck, build, test |
+| CI | Push to main/develop | Full pipeline + Docker build |
+| Security Scan | Weekly + manual | Dependency audit, SAST, secrets scan |
+| Deploy | Manual | Build & push Docker images to ghcr.io |
 
 ## Architecture
 

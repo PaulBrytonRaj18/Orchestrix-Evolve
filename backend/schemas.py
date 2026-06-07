@@ -166,6 +166,10 @@ class CitationResponse(BaseModel):
         from_attributes = True
 
 
+class NoteCreate(BaseModel):
+    content: str = Field(..., min_length=0, max_length=10000)
+
+
 class NoteResponse(BaseModel):
     id: str
     paper_id: str
@@ -177,33 +181,8 @@ class NoteResponse(BaseModel):
         from_attributes = True
 
 
-class CitationResponse(BaseModel):
-    id: str
-    paper_id: str
-    apa: Optional[str] = None
-    mla: Optional[str] = None
-    ieee: Optional[str] = None
-    chicago: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class NoteCreate(BaseModel):
-    content: str = Field(..., min_length=0, max_length=10000)
-
-
-class NoteResponse(BaseModel):
-    id: str
-    paper_id: str
-    content: str
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
 
 
 class ConflictResponse(BaseModel):
