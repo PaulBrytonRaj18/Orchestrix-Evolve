@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { api } from '../api';
+import { useToast } from '../contexts/ToastContext';
 import { Map, FileText, RefreshCw, Search, ArrowRight } from 'lucide-react';
 import type { RoadmapResponse } from '../types/api';
 
@@ -8,18 +9,23 @@ interface RoadmapPanelProps {
   roadmap: RoadmapResponse | null;
   sessionId: string;
   onQueryClick: (query: string) => void;
+  onRefresh?: () => void;
 }
 
-function RoadmapPanel({ roadmap, sessionId, onQueryClick }: RoadmapPanelProps) {
+function RoadmapPanel({ roadmap, sessionId, onQueryClick, onRefresh }: RoadmapPanelProps) {
+  const { showToast } = useToast();
   const [isGenerating, setIsGenerating] = useState(false);
 
   const generateRoadmap = async (): Promise<void> => {
     setIsGenerating(true);
     try {
       await api.generateRoadmap(sessionId);
-      window.location.reload();
-    } catch (error) {
-      console.error('Error generating roadmap:', error);
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to generate roadmap', 'error');
+    } finally {
       setIsGenerating(false);
     }
   };

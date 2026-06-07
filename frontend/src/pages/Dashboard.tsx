@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../api'
+import { useToast } from '../contexts/ToastContext'
 import SessionSidebar from '../components/SessionSidebar'
 import PaperCard from '../components/PaperCard'
 import AnalysisCharts from '../components/AnalysisCharts'
@@ -30,6 +31,7 @@ const itemVariants = {
 
 function Dashboard() {
   const navigate = useNavigate()
+  const { showToast } = useToast()
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>()
   const [sessions, setSessions] = useState<Session[]>([])
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(urlSessionId || null)
@@ -42,8 +44,8 @@ function Dashboard() {
     try {
       const data = await api.getSessions()
       setSessions(data)
-    } catch (error) {
-      console.error('Error loading sessions:', error)
+    } catch {
+      // Silent fail — sessions list is non-critical
     }
   }, [])
 
@@ -52,12 +54,12 @@ function Dashboard() {
     try {
       const data = await api.getSession(id)
       setCurrentSession(data)
-    } catch (error) {
-      console.error('Error loading session:', error)
+    } catch {
+      showToast('Failed to load session', 'error')
     } finally {
       setIsLoading(false)
     }
-  }, [])
+  }, [showToast])
 
   useEffect(() => {
     loadSessions()
@@ -76,13 +78,13 @@ function Dashboard() {
       return setTimeout(async () => {
         try {
           await api.updateNote(paperId, content)
-        } catch (error) {
-          console.error('Error saving note:', error)
+        } catch {
+          showToast('Failed to save note', 'error')
         }
       }, 800)
     })
     return () => timeoutIds.forEach(id => clearTimeout(id))
-  }, [debouncedNoteChanges])
+  }, [debouncedNoteChanges, showToast])
 
   const handleSelectSession = (id: string) => {
     setCurrentSessionId(id)
@@ -98,7 +100,7 @@ function Dashboard() {
     try {
       await api.synthesize(currentSessionId, paperIds)
     } catch (error) {
-      console.error('Synthesis error:', error)
+      showToast(error instanceof Error ? error.message : 'Synthesis failed', 'error')
     }
   }
 

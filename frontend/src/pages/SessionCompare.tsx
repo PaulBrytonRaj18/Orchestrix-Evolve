@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { api } from '../api'
+import { useToast } from '../contexts/ToastContext'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
 import { GitCompare, Loader2 } from 'lucide-react'
 import type { Session, SessionFull } from '../types/api'
@@ -12,6 +13,7 @@ interface CustomTooltipProps {
 }
 
 function SessionCompare() {
+  const { showToast } = useToast()
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionA, setSessionA] = useState<SessionFull | null>(null)
   const [sessionB, setSessionB] = useState<SessionFull | null>(null)
@@ -23,18 +25,18 @@ function SessionCompare() {
     try {
       const data = await api.getSessions()
       setSessions(data)
-    } catch (error) {
-      console.error('Error loading sessions:', error)
+    } catch {
+      showToast('Failed to load sessions', 'error')
     }
-  }, [])
+  }, [showToast])
 
   const loadSession = useCallback(async (id: string, setter: React.Dispatch<React.SetStateAction<SessionFull | null>>) => {
     setIsLoading(true)
     try {
       const data = await api.getSession(id)
       setter(data)
-    } catch (error) {
-      console.error('Error loading session:', error)
+    } catch {
+      showToast('Failed to load session for comparison', 'error')
     } finally {
       setIsLoading(false)
     }

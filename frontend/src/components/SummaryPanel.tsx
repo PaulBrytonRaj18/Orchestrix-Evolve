@@ -101,6 +101,7 @@ function SummaryPanel({ papers, onSynthesize }: SummaryPanelProps) {
                 type="checkbox"
                 checked={selectedForSynthesis.includes(paper.id)}
                 onChange={() => toggleForSynthesis(paper.id)}
+                aria-label={`Select ${paper.title} for synthesis`}
                 style={{ marginTop: '4px' }}
               />
               <div style={{ flex: 1 }}>

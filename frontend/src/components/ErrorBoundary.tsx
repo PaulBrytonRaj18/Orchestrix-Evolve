@@ -22,10 +22,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   }
 
   componentDidCatch(error: Error, errorInfo: React.ErrorInfo): void {
-    this.setState({
-      error,
-      errorInfo,
-    });
+    this.setState({ error, errorInfo });
     console.error('ErrorBoundary caught:', error, errorInfo);
   }
 
@@ -36,118 +33,36 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
   render(): React.ReactNode {
     if (this.state.hasError) {
       return (
-        <div
-          style={{
-            minHeight: '100vh',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: '2rem',
-            backgroundColor: 'var(--bg-primary, #f5f5f5)',
-          }}
-        >
-          <div
-            style={{
-              maxWidth: '500px',
-              width: '100%',
-              backgroundColor: 'white',
-              borderRadius: '12px',
-              boxShadow: '0 4px 20px rgba(0,0,0,0.1)',
-              padding: '2rem',
-              textAlign: 'center',
-            }}
-          >
-            <div
-              style={{
-                width: '64px',
-                height: '64px',
-                margin: '0 auto 1.5rem',
-                borderRadius: '50%',
-                backgroundColor: '#fef3c7',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <AlertTriangle size={32} color="#d97706" />
+        <div className="error-boundary-overlay">
+          <div className="error-boundary-card">
+            <div className="error-boundary-icon">
+              <AlertTriangle size={32} />
             </div>
 
-            <h2
-              style={{
-                fontSize: '1.5rem',
-                fontWeight: '600',
-                marginBottom: '0.5rem',
-                color: '#1f2937',
-              }}
-            >
+            <h2 className="error-boundary-title">
               Something went wrong
             </h2>
 
-            <p
-              style={{
-                color: '#6b7280',
-                marginBottom: '1.5rem',
-                lineHeight: '1.5',
-              }}
-            >
+            <p className="error-boundary-message">
               An unexpected error occurred. The application has been designed to recover from this
               state automatically.
             </p>
 
             {process.env.NODE_ENV === 'development' && this.state.error && (
-              <details
-                style={{
-                  marginBottom: '1.5rem',
-                  padding: '1rem',
-                  backgroundColor: '#f3f4f6',
-                  borderRadius: '8px',
-                  textAlign: 'left',
-                }}
-              >
-                <summary
-                  style={{
-                    cursor: 'pointer',
-                    fontWeight: '500',
-                    marginBottom: '0.5rem',
-                  }}
-                >
+              <details className="error-boundary-details">
+                <summary className="error-boundary-summary">
                   Error Details
                 </summary>
-                <pre
-                  style={{
-                    fontSize: '0.75rem',
-                    overflow: 'auto',
-                    maxHeight: '200px',
-                  }}
-                >
+                <pre className="error-boundary-stack">
                   {this.state.error.toString()}
                 </pre>
               </details>
             )}
 
-            <div
-              style={{
-                display: 'flex',
-                gap: '1rem',
-                justifyContent: 'center',
-                flexWrap: 'wrap',
-              }}
-            >
+            <div className="error-boundary-actions">
               <button
                 onClick={this.handleReset}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.75rem 1.5rem',
-                  backgroundColor: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  fontWeight: '500',
-                  cursor: 'pointer',
-                  transition: 'background-color 0.2s',
-                }}
+                className="btn btn-primary btn-lg"
               >
                 <RefreshCw size={18} />
                 Try Again
@@ -155,19 +70,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
               <button
                 onClick={() => (window.location.href = '/')}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.75rem 1.5rem',
-                  backgroundColor: 'white',
-                  color: '#374151',
-                  border: '1px solid #d1d5db',
-                  borderRadius: '8px',
-                  fontWeight: '500',
-                  cursor: 'pointer',
-                  transition: 'all 0.2s',
-                }}
+                className="btn btn-secondary btn-lg"
               >
                 <Home size={18} />
                 Go Home

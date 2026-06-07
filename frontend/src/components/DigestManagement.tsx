@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../api';
+import { useToast } from '../contexts/ToastContext';
 import { Mail, Plus, Loader2, X, Clock, Play, Trash2, Calendar } from 'lucide-react';
 import type { ScheduledDigest } from '../types/api';
 
@@ -12,6 +13,7 @@ interface FormData {
 }
 
 function DigestManagement() {
+  const { showToast } = useToast();
   const [digests, setDigests] = useState<ScheduledDigest[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -32,8 +34,8 @@ function DigestManagement() {
     try {
       const data = await api.getDigests();
       setDigests(data);
-    } catch (error) {
-      console.error('Error loading digests:', error);
+    } catch {
+      showToast('Failed to load digests', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -55,7 +57,7 @@ function DigestManagement() {
       setShowCreateForm(false);
       loadDigests();
     } catch (error) {
-      console.error('Error creating digest:', error);
+      showToast(error instanceof Error ? error.message : 'Failed to create digest', 'error');
     } finally {
       setIsCreating(false);
     }
@@ -68,18 +70,17 @@ function DigestManagement() {
         prev.map((d) => (d.id === digestId ? { ...d, is_active: result.is_active } : d)),
       );
     } catch (error) {
-      console.error('Error toggling digest:', error);
+      showToast(error instanceof Error ? error.message : 'Failed to toggle digest', 'error');
     }
   };
 
   const handleDeleteDigest = async (digestId: string): Promise<void> => {
-    if (!confirm('Delete this digest?')) return;
-
     try {
       await api.deleteDigest(digestId);
       setDigests((prev) => prev.filter((d) => d.id !== digestId));
+      showToast('Digest deleted', 'success');
     } catch (error) {
-      console.error('Error deleting digest:', error);
+      showToast(error instanceof Error ? error.message : 'Failed to delete digest', 'error');
     }
   };
 
@@ -87,7 +88,7 @@ function DigestManagement() {
     try {
       await api.triggerDigestRun(digestId);
     } catch (error) {
-      console.error('Error triggering digest:', error);
+      showToast(error instanceof Error ? error.message : 'Failed to trigger digest run', 'error');
     }
   };
 

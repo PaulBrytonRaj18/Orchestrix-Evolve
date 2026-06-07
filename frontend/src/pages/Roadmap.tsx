@@ -2,11 +2,13 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../api'
 import { useNavigate } from 'react-router-dom'
+import { useToast } from '../contexts/ToastContext'
 import { Map, FileText, Plus, ChevronDown, ChevronUp, Loader2, RefreshCw } from 'lucide-react'
 import type { Session, RoadmapResponse } from '../types/api'
 
 function Roadmap() {
   const navigate = useNavigate()
+  const { showToast } = useToast()
   const [sessions, setSessions] = useState<Session[]>([])
   const [loading, setLoading] = useState(true)
   const [roadmaps, setRoadmaps] = useState<Record<string, RoadmapResponse | null>>({})
@@ -35,8 +37,8 @@ function Roadmap() {
       const roadmapResults = await Promise.all(roadmapPromises)
       const roadmapMap: Record<string, RoadmapResponse | null> = Object.assign({}, ...roadmapResults)
       setRoadmaps(roadmapMap)
-    } catch (error) {
-      console.error('Error fetching sessions:', error)
+    } catch {
+      showToast('Failed to load sessions', 'error')
     } finally {
       setLoading(false)
     }
@@ -49,7 +51,7 @@ function Roadmap() {
       await fetchSessionsAndRoadmaps()
       setExpandedRoadmap(sessionId)
     } catch (error) {
-      console.error('Error generating roadmap:', error)
+      showToast(error instanceof Error ? error.message : 'Failed to generate roadmap', 'error')
     } finally {
       setGeneratingId(null)
     }

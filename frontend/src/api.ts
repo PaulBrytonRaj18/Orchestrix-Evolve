@@ -76,6 +76,28 @@ async function fetchJSON<T>(url: string, options: RequestInit = {}): Promise<T> 
   return response.json() as Promise<T>;
 }
 
+async function fetchBlob(url: string): Promise<Blob> {
+  const token = await getToken();
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  const response = await fetch(`${API_BASE}${url}`, { headers });
+  if (!response.ok) throw new Error(`Download failed: HTTP ${response.status}`);
+  return response.blob();
+}
+
+function downloadBlob(blob: Blob, filename: string, _mimeType: string): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 export const api = {
   health: (): Promise<HealthResponse> => fetchJSON<HealthResponse>('/health'),
 
@@ -157,14 +179,14 @@ export const api = {
       body: JSON.stringify(paperIds),
     }),
 
-  exportBib: (sessionId: string): string => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    return `${API_BASE}/sessions/${sessionId}/export/bib${token ? `?token=${token}` : ''}`;
+  exportBib: async (sessionId: string): Promise<void> => {
+    const blob = await fetchBlob(`/sessions/${sessionId}/export/bib`);
+    downloadBlob(blob, `${sessionId}.bib`, 'application/x-bibtex');
   },
 
-  exportTxt: (sessionId: string): string => {
-    const token = localStorage.getItem(TOKEN_KEY);
-    return `${API_BASE}/sessions/${sessionId}/export/txt${token ? `?token=${token}` : ''}`;
+  exportTxt: async (sessionId: string): Promise<void> => {
+    const blob = await fetchBlob(`/sessions/${sessionId}/export/txt`);
+    downloadBlob(blob, `${sessionId}.txt`, 'text/plain');
   },
 
   getConflicts: (sessionId: string): Promise<ConflictResponse[]> =>

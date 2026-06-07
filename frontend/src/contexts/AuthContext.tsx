@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from "react";
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../lib/supabase";
 import type { Session as SupabaseSession } from "@supabase/supabase-js";
 
@@ -24,8 +24,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [session, setSession] = useState<SupabaseSession | null>(null);
   const [loading, setLoading] = useState(true);
+  const initialisedRef = useRef(false);
+
+  const clearAuth = useCallback(() => {
+    setUser(null);
+    setSession(null);
+  }, []);
 
   useEffect(() => {
+    if (initialisedRef.current) return;
+    initialisedRef.current = true;
+
     async function initAuth() {
       try {
         const {
@@ -65,8 +74,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       );
     });
 
-    return () => subscription.unsubscribe();
-  }, []);
+    const handleForceLogout = () => {
+      clearAuth();
+      supabase.auth.signOut().catch(() => {});
+    };
+
+    window.addEventListener('auth:logout', handleForceLogout);
+
+    return () => {
+      subscription.unsubscribe();
+      window.removeEventListener('auth:logout', handleForceLogout);
+    };
+  }, [clearAuth]);
 
   const signIn = useCallback(
     async (email: string, password: string) => {

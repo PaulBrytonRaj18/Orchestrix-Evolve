@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api } from '../api';
+import { useToast } from '../contexts/ToastContext';
 import { AlertTriangle, Check, X, Loader2, Shield } from 'lucide-react';
 import type { ConflictResponse } from '../types/api';
 
@@ -9,6 +10,7 @@ interface ConflictsPanelProps {
 }
 
 function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
+  const { showToast } = useToast();
   const [conflicts, setConflicts] = useState<ConflictResponse[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedConflict, setSelectedConflict] = useState<ConflictResponse | null>(null);
@@ -26,8 +28,8 @@ function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
     try {
       const data = await api.getConflicts(sessionId);
       setConflicts(data);
-    } catch (error) {
-      console.error('Error loading conflicts:', error);
+    } catch {
+      showToast('Failed to load conflicts', 'error');
     } finally {
       setIsLoading(false);
     }
@@ -47,7 +49,7 @@ function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
       setSelectedConflict(null);
       setResolutionText('');
     } catch (error) {
-      console.error('Error resolving conflict:', error);
+      showToast(error instanceof Error ? error.message : 'Failed to resolve conflict', 'error');
     } finally {
       setIsResolving(false);
     }
@@ -59,7 +61,7 @@ function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
       const result = await api.detectConflicts(sessionId);
       setConflicts(result.conflicts || []);
     } catch (error) {
-      console.error('Error detecting conflicts:', error);
+      showToast(error instanceof Error ? error.message : 'Failed to detect conflicts', 'error');
     } finally {
       setIsLoading(false);
     }

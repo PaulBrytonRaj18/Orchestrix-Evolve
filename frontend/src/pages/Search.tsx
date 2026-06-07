@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api } from '../api'
+import { useToast } from '../contexts/ToastContext'
 import AgentTraceLog from '../components/AgentTraceLog'
 import PaperCard from '../components/PaperCard'
 import AnalysisCharts from '../components/AnalysisCharts'
@@ -29,6 +30,7 @@ const itemVariants = {
 }
 
 function Search() {
+  const { showToast } = useToast()
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [isSearching, setIsSearching] = useState(false)
@@ -68,7 +70,7 @@ function Search() {
       setRoadmap(result.roadmap || null)
 
     } catch (error) {
-      console.error('Search error:', error)
+      showToast(error instanceof Error ? error.message : 'Search failed', 'error')
     } finally {
       setIsSearching(false)
     }
@@ -90,8 +92,8 @@ function Search() {
           pollingRef.current = null
         }
       }
-    } catch (error) {
-      console.error('Polling error:', error)
+    } catch {
+      // Polling errors are expected during long operations — ignore
     }
   }, [currentSessionId, trace])
 
@@ -134,8 +136,9 @@ function Search() {
     if (!currentSessionId || paperIds.length < 2) return
     try {
       await api.synthesize(currentSessionId, paperIds)
+      showToast('Synthesis complete', 'success')
     } catch (error) {
-      console.error('Synthesis error:', error)
+      showToast(error instanceof Error ? error.message : 'Synthesis failed', 'error')
     }
   }
 
@@ -148,7 +151,7 @@ function Search() {
         setAnalysis(result.orchestration_result.analysis)
       }
     } catch (error) {
-      console.error('Error executing roadmap query:', error)
+      showToast(error instanceof Error ? error.message : 'Roadmap query failed', 'error')
     } finally {
       setIsSearching(false)
     }
@@ -171,7 +174,7 @@ function Search() {
   ]
 
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto', paddingTop: 'var(--space-16)' }}>
+    <div className="search-page">
       {/* Hero Search */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -347,6 +350,14 @@ function Search() {
                   roadmap={roadmap}
                   sessionId={currentSessionId}
                   onQueryClick={handleRoadmapQueryClick}
+                  onRefresh={async () => {
+                    try {
+                      const data = await api.getRoadmap(currentSessionId);
+                      setRoadmap(data);
+                    } catch {
+                      setRoadmap(null);
+                    }
+                  }}
                 />
               )}
             </motion.div>
