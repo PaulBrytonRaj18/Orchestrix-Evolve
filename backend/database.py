@@ -1,6 +1,7 @@
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -21,7 +22,7 @@ def is_postgres():
 
 if is_postgres():
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker, Session, declarative_base
+    from sqlalchemy.orm import Session, declarative_base, sessionmaker
     from sqlalchemy.pool import QueuePool
 
     # Connection settings for Supabase/PostgreSQL
@@ -46,7 +47,6 @@ if is_postgres():
 
     # Supabase requires SSL - ensure it's enabled unless explicitly disabled
     if not DISABLE_SSL:
-        from sqlalchemy.pool import NullPool
 
         # For Supabase, use SSL but be resilient to connection issues
         pass  # psycopg2 handles SSL automatically with default settings
@@ -104,7 +104,7 @@ if is_postgres():
 
 else:
     from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker, Session, declarative_base
+    from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
     if not DATABASE_URL:
         sqlite_path = os.getenv("SQLITE_DB_PATH", "./orchestrix.db")

@@ -1,14 +1,16 @@
 import asyncio
-import httpx
-import feedparser
+import logging
 import re
-from datetime import datetime, timezone, timedelta
-from typing import List, Dict, Optional
+from datetime import UTC, datetime, timedelta
+
+import feedparser
+import httpx
 from dateutil.relativedelta import relativedelta
-import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 SEMANTIC_SCHOLAR_API_URL = "https://api.semanticscholar.org/graph/v1/paper/search"
 ARXIV_API_URL = "http://export.arxiv.org/api/query"
@@ -24,7 +26,6 @@ def normalize_string(text: str) -> str:
 
 
 def get_frequency_delta(frequency: str) -> timedelta:
-    """Get the timedelta for a given frequency."""
     if frequency == "daily":
         return timedelta(days=1)
     elif frequency == "weekly":
@@ -37,24 +38,20 @@ def get_frequency_delta(frequency: str) -> timedelta:
 
 
 def calculate_next_run(last_run: datetime, frequency: str) -> datetime:
-    """Calculate the next run time based on frequency."""
     delta = get_frequency_delta(frequency)
     return last_run + delta
 
 
-def get_session_date_threshold(session: Dict, frequency: str) -> datetime:
-    """Get the date threshold for finding new papers since last run."""
+def get_session_date_threshold(session: dict, frequency: str) -> datetime:
     if not session.get("created_at"):
         threshold = get_frequency_delta(frequency)
-        return datetime.now(timezone.utc) - threshold
-
+        return datetime.now(UTC) - threshold
     return session["created_at"]
 
 
 async def query_semantic_scholar_new(
-    query: str, threshold_date: Optional[datetime] = None, limit: int = 50
-) -> List[Dict]:
-    """Query Semantic Scholar for papers, optionally filtered by date."""
+    query: str, threshold_date: datetime | None = None, limit: int = 50
+) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.get(
@@ -77,7 +74,7 @@ async def query_semantic_scholar_new(
                 if threshold_date and item.get("year"):
                     try:
                         paper_date = datetime(
-                            item.get("year"), 1, 1, tzinfo=timezone.utc
+                            item.get("year"), 1, 1, tzinfo=UTC
                         )
                         if paper_date < threshold_date:
                             continue
@@ -87,29 +84,26 @@ async def query_semantic_scholar_new(
                 authors = [
                     author.get("name", "Unknown") for author in item.get("authors", [])
                 ]
-                papers.append(
-                    {
-                        "title": item.get("title", ""),
-                        "authors": authors,
-                        "year": item.get("year"),
-                        "abstract": item.get("abstract"),
-                        "source_url": item.get("url"),
-                        "citation_count": item.get("citationCount"),
-                        "external_id": item.get("externalIds", {}).get("ArXiv")
-                        or item.get("externalIds", {}).get("DOI", ""),
-                        "source": "semantic_scholar",
-                    }
-                )
+                papers.append({
+                    "title": item.get("title", ""),
+                    "authors": authors,
+                    "year": item.get("year"),
+                    "abstract": item.get("abstract"),
+                    "source_url": item.get("url"),
+                    "citation_count": item.get("citationCount"),
+                    "external_id": item.get("externalIds", {}).get("ArXiv")
+                    or item.get("externalIds", {}).get("DOI", ""),
+                    "source": "semantic_scholar",
+                })
             return papers
     except Exception as e:
-        print(f"Semantic Scholar API error: {e}")
+        logger.error(f"Semantic Scholar API error: {e}")
         return []
 
 
 async def query_arxiv_new(
-    query: str, threshold_date: Optional[datetime] = None, limit: int = 50
-) -> List[Dict]:
-    """Query arXiv for papers, optionally filtered by date."""
+    query: str, threshold_date: datetime | None = None, limit: int = 50
+) -> list[dict]:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             search_query = f"all:{query}"
@@ -117,7 +111,10 @@ async def query_arxiv_new(
                 start_date = threshold_date.strftime("%Y-%m-%d")
                 search_query += f"+ AND submittedDate:[{start_date} TO NOW]"
 
-            url = f"{ARXIV_API_URL}?search_query={search_query}&start=0&max_results={limit}&sortBy=submittedDate&sortOrder=descending"
+            url = (
+                f"{ARXIV_API_URL}?search_query={search_query}"
+                f"&start=0&max_results={limit}&sortBy=submittedDate&sortOrder=descending"
+            )
             response = await client.get(url)
             response.raise_for_status()
 
@@ -138,48 +135,34 @@ async def query_arxiv_new(
                 if hasattr(entry, "id"):
                     paper_id = entry.id.split("/")[-1]
 
-                papers.append(
-                    {
-                        "title": entry.get("title", "").replace("\n", " "),
-                        "authors": authors,
-                        "year": int(entry.published_parsed[0])
-                        if hasattr(entry, "published_parsed") and entry.published_parsed
-                        else None,
-                        "abstract": abstract.replace("\n", " ")[:2000],
-                        "source_url": entry.get("id", ""),
-                        "citation_count": None,
-                        "external_id": paper_id,
-                        "source": "arxiv",
-                    }
-                )
+                papers.append({
+                    "title": entry.get("title", "").replace("\n", " "),
+                    "authors": authors,
+                    "year": int(entry.published_parsed[0])
+                    if hasattr(entry, "published_parsed") and entry.published_parsed
+                    else None,
+                    "abstract": abstract.replace("\n", " ")[:2000],
+                    "source_url": entry.get("id", ""),
+                    "citation_count": None,
+                    "external_id": paper_id,
+                    "source": "arxiv",
+                })
             return papers
     except Exception as e:
-        print(f"arXiv API error: {e}")
+        logger.error(f"arXiv API error: {e}")
         return []
 
 
 async def run_digest(
     query: str,
-    last_run_at: Optional[datetime] = None,
-    existing_external_ids: Optional[List[str]] = None,
+    last_run_at: datetime | None = None,
+    existing_external_ids: list[str] | None = None,
     limit: int = 30,
-) -> Dict:
-    """
-    Runs a digest query to find new papers since last run.
-
-    Args:
-        query: The search query
-        last_run_at: Datetime of last run (None for first run)
-        existing_external_ids: List of known external IDs to filter out
-        limit: Maximum number of new papers to return
-
-    Returns:
-        Dict with new_papers, total_found, and is_first_run
-    """
+) -> dict:
     existing_ids = set(existing_external_ids or [])
 
     threshold = (
-        last_run_at if last_run_at else datetime.now(timezone.utc) - timedelta(days=7)
+        last_run_at if last_run_at else datetime.now(UTC) - timedelta(days=7)
     )
 
     ss_task = query_semantic_scholar_new(query, threshold, limit)
@@ -216,12 +199,8 @@ async def run_digest(
     }
 
 
-async def check_for_updates(query: str, existing_external_ids: List[str]) -> Dict:
-    """
-    Quick check for updates without fetching full paper details.
-    Returns count of potential new papers.
-    """
-    threshold = datetime.now(timezone.utc) - timedelta(days=1)
+async def check_for_updates(query: str, existing_external_ids: list[str]) -> dict:
+    datetime.now(UTC) - timedelta(days=1)
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -240,14 +219,13 @@ async def check_for_updates(query: str, existing_external_ids: List[str]) -> Dic
 
             return {"has_updates": new_count > 0, "potential_new_count": new_count}
     except Exception as e:
-        print(f"Update check error: {e}")
+        logger.error(f"Update check error: {e}")
         return {"has_updates": False, "potential_new_count": 0}
 
 
 def generate_digest_notification(
-    digest_name: str, query: str, new_papers: List[Dict], frequency: str
+    digest_name: str, query: str, new_papers: list[dict], frequency: str
 ) -> str:
-    """Generate an email notification body for the digest."""
     if not new_papers:
         return f"""
 Orchestrix Research Digest: {digest_name}
@@ -296,7 +274,7 @@ Run frequency: {frequency}
 {"".join(papers_list)}
 
 {"=" * 50}
-{f"Plus {more_count} more new papers. View all in your Orchestrix dashboard." if more_count > 0 else ""}
+{f"Plus {more_count} more new papers. See dashboard." if more_count > 0 else ""}
 {"=" * 50}
 
 Total new papers this digest: {len(new_papers)}
@@ -306,25 +284,14 @@ Orchestrix - Multi-Agent Research Intelligence Platform
 """
 
 
-async def verify_query_syntax(query: str) -> tuple[bool, Optional[str]]:
-    """Verify that a query is valid for the APIs."""
+async def verify_query_syntax(query: str) -> tuple[bool, str | None]:
     if not query or len(query.strip()) < 3:
         return False, "Query must be at least 3 characters"
 
     if len(query) > 500:
         return False, "Query must be less than 500 characters"
 
-    dangerous_patterns = [
-        "--",
-        "/*",
-        "*/",
-        "xp_",
-        "sp_",
-        "exec",
-        "execute",
-        "union",
-        "select",
-    ]
+    dangerous_patterns = ["--", "/*", "*/", "xp_", "sp_", "exec", "execute", "union", "select"]
     query_lower = query.lower()
     for pattern in dangerous_patterns:
         if pattern in query_lower:

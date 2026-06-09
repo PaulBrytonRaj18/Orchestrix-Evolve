@@ -1,30 +1,24 @@
 """
 Supabase Authentication for Orchestrix Backend
-Replaces custom JWT auth with Supabase Auth
 """
 
-import os
 import logging
-from typing import Optional
+import os
 from functools import lru_cache
-from datetime import datetime, timezone
 
 import jwt
-from jwt import PyJWKClient
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt import PyJWKClient
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# Supabase configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
 
-# JWT verification settings
 ISSUER = f"{SUPABASE_URL}/auth/v1" if SUPABASE_URL else None
 JWKS_URL = f"{ISSUER}/.well-known/jwks.json" if ISSUER else None
 
@@ -33,21 +27,18 @@ security = HTTPBearer(auto_error=False)
 
 @lru_cache(maxsize=1)
 def _get_jwks_client():
-    """Get JWKS client for verifying Supabase JWTs"""
     if not JWKS_URL:
-        logger.warning("JWKS_URL not configured - JWT verification may fail")
+        logger.warning("JWKS_URL not configured - JWT verification will fail")
         return None
     return PyJWKClient(JWKS_URL)
 
 
 class SupabaseUser:
-    """Represents an authenticated Supabase user"""
-
     def __init__(
         self,
         user_id: str,
-        email: Optional[str] = None,
-        username: Optional[str] = None,
+        email: str | None = None,
+        username: str | None = None,
         **kwargs,
     ):
         self.id = user_id
@@ -57,12 +48,8 @@ class SupabaseUser:
 
 
 async def verify_supabase_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> SupabaseUser:
-    """
-    Verify Supabase JWT token and return user information.
-    Uses JWKS for signature verification (more secure).
-    """
     if credentials is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -132,7 +119,7 @@ async def verify_supabase_token(
         logger.warning(f"Invalid token: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {str(e)}",
+            detail="Invalid authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
@@ -140,28 +127,22 @@ async def verify_supabase_token(
 async def get_current_user(
     user: SupabaseUser = Depends(verify_supabase_token),
 ) -> str:
-    """Get current user ID from Supabase auth"""
     return user.id
 
 
 async def get_current_user_optional(
-    user: Optional[SupabaseUser] = Depends(verify_supabase_token),
-) -> Optional[str]:
-    """Get current user ID if authenticated, None otherwise"""
+    user: SupabaseUser | None = Depends(verify_supabase_token),
+) -> str | None:
     if user is None:
         return None
     return user.id
 
 
 def get_supabase_client():
-    """Get Supabase client for server-side operations"""
-    from supabase import create_client, Client
+    from supabase import create_client
 
     if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
         logger.error("SUPABASE_URL or SUPABASE_SERVICE_KEY not configured")
         raise ValueError("Supabase configuration missing")
 
     return create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-
-

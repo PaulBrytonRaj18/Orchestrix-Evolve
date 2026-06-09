@@ -1,22 +1,23 @@
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models import (
-    User,
-    Session,
-    Paper,
     Analysis,
+    Citation,
+    Conflict,
+    DigestRun,
+    Note,
+    Paper,
+    Roadmap,
+    ScheduledDigest,
+    Session,
     Summary,
     Synthesis,
-    Citation,
-    Note,
-    Conflict,
-    ScheduledDigest,
-    DigestRun,
-    Roadmap,
+    User,
     generate_uuid,
 )
 
@@ -53,11 +54,9 @@ class TestUserModel:
         assert user.id is None
         assert user.created_at is None
 
-    def test_user_defaults(self):
-        from models import User
-
-        assert User.is_active.default.arg == True
-        assert User.is_admin.default.arg == False
+    def test_user_default_values(self):
+        assert User.is_active.default.arg
+        assert not User.is_admin.default.arg
 
 
 class TestSessionModel:

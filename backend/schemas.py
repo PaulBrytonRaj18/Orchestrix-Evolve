@@ -1,6 +1,8 @@
-from pydantic import BaseModel, Field, EmailStr, field_validator
-from typing import Optional, List, Any
+import re
 from datetime import datetime
+from typing import Any, Optional
+
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UserBase(BaseModel):
@@ -11,6 +13,19 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str = Field(..., min_length=8)
     confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def password_complexity(cls, v: str) -> str:
+        if not re.search(r"[A-Z]", v):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not re.search(r"[a-z]", v):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not re.search(r"\d", v):
+            raise ValueError("Password must contain at least one digit")
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\;'/`~]", v):
+            raise ValueError("Password must contain at least one special character")
+        return v
 
 
 class UserLogin(BaseModel):
@@ -31,13 +46,14 @@ class UserResponse(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    email: Optional[EmailStr] = None
-    username: Optional[str] = Field(None, min_length=3, max_length=50)
-    password: Optional[str] = Field(None, min_length=8)
+    email: EmailStr | None = None
+    username: str | None = Field(None, min_length=3, max_length=50)
+    password: str | None = Field(None, min_length=8)
 
 
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str | None = None
     token_type: str = "bearer"
     user: UserResponse
 
@@ -54,18 +70,18 @@ class SessionCreate(BaseModel):
             v_lower = v.lower()
             for pattern in dangerous_patterns:
                 if pattern in v_lower:
-                    raise ValueError(f"Invalid input detected")
+                    raise ValueError("Invalid input detected")
         return v.strip()
 
 
 class SessionResponse(BaseModel):
     id: str
-    user_id: Optional[str] = None
+    user_id: str | None = None
     name: str
     query: str
     created_at: datetime
     updated_at: datetime
-    paper_count: Optional[int] = 0
+    paper_count: int | None = 0
 
     class Config:
         from_attributes = True
@@ -73,13 +89,13 @@ class SessionResponse(BaseModel):
 
 class PaperBase(BaseModel):
     title: str = Field(..., min_length=1, max_length=1000)
-    authors: List[str] = Field(default_factory=list, max_length=500)
-    year: Optional[int] = Field(None, ge=1900, le=2100)
-    abstract: Optional[str] = Field(None, max_length=10000)
-    source_url: Optional[str] = Field(None, max_length=2000)
-    citation_count: Optional[int] = Field(None, ge=0)
-    relevance_score: Optional[float] = Field(None, ge=0.0, le=1.0)
-    external_id: Optional[str] = Field(None, max_length=500)
+    authors: list[str] = Field(default_factory=list, max_length=500)
+    year: int | None = Field(None, ge=1900, le=2100)
+    abstract: str | None = Field(None, max_length=10000)
+    source_url: str | None = Field(None, max_length=2000)
+    citation_count: int | None = Field(None, ge=0)
+    relevance_score: float | None = Field(None, ge=0.0, le=1.0)
+    external_id: str | None = Field(None, max_length=500)
     source: str = Field(..., max_length=100)
 
 
@@ -99,7 +115,7 @@ class PaperWithDetails(PaperBase):
     updated_at: datetime
     summary: Optional["SummaryResponse"] = None
     citation: Optional["CitationResponse"] = None
-    notes: List["NoteResponse"] = []
+    notes: list["NoteResponse"] = []
 
     class Config:
         from_attributes = True
@@ -120,10 +136,10 @@ class AnalysisResponse(BaseModel):
 class SummaryResponse(BaseModel):
     id: str
     paper_id: str
-    abstract_compression: Optional[str] = None
-    key_contributions: Optional[str] = None
-    methodology: Optional[str] = None
-    limitations: Optional[str] = None
+    abstract_compression: str | None = None
+    key_contributions: str | None = None
+    methodology: str | None = None
+    limitations: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -134,8 +150,8 @@ class SummaryResponse(BaseModel):
 class SynthesisResponse(BaseModel):
     id: str
     session_id: str
-    paper_ids: List[str] = Field(default_factory=list, max_length=100)
-    content: Optional[str] = Field(None, max_length=50000)
+    paper_ids: list[str] = Field(default_factory=list, max_length=100)
+    content: str | None = Field(None, max_length=50000)
     created_at: datetime
     updated_at: datetime
 
@@ -155,10 +171,10 @@ class SynthesisResponse(BaseModel):
 class CitationResponse(BaseModel):
     id: str
     paper_id: str
-    apa: Optional[str] = Field(None, max_length=2000)
-    mla: Optional[str] = Field(None, max_length=2000)
-    ieee: Optional[str] = Field(None, max_length=2000)
-    chicago: Optional[str] = Field(None, max_length=2000)
+    apa: str | None = Field(None, max_length=2000)
+    mla: str | None = Field(None, max_length=2000)
+    ieee: str | None = Field(None, max_length=2000)
+    chicago: str | None = Field(None, max_length=2000)
     created_at: datetime
     updated_at: datetime
 
@@ -191,11 +207,11 @@ class ConflictResponse(BaseModel):
     conflict_type: str
     severity: str
     title: str
-    description: Optional[str] = None
-    analysis_insight: Optional[str] = None
-    summarization_insight: Optional[str] = None
+    description: str | None = None
+    analysis_insight: str | None = None
+    summarization_insight: str | None = None
     resolved: bool
-    resolution_notes: Optional[str] = None
+    resolution_notes: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -213,7 +229,7 @@ class ScheduledDigestCreate(BaseModel):
     frequency: str = Field(
         default="weekly", pattern="^(daily|weekly|biweekly|monthly)$"
     )
-    notify_email: Optional[EmailStr] = None
+    notify_email: EmailStr | None = None
 
 
 class ScheduledDigestResponse(BaseModel):
@@ -221,10 +237,10 @@ class ScheduledDigestResponse(BaseModel):
     name: str
     query: str
     frequency: str
-    last_run_at: Optional[datetime] = None
-    next_run_at: Optional[datetime] = None
+    last_run_at: datetime | None = None
+    next_run_at: datetime | None = None
     is_active: bool
-    notify_email: Optional[str] = None
+    notify_email: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -235,12 +251,12 @@ class ScheduledDigestResponse(BaseModel):
 class DigestRunResponse(BaseModel):
     id: str
     scheduled_digest_id: str
-    session_id: Optional[str] = None
+    session_id: str | None = None
     query: str
     new_papers_count: int
-    new_paper_ids: List[str]
+    new_paper_ids: list[str]
     status: str
-    error_message: Optional[str] = None
+    error_message: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -249,37 +265,40 @@ class DigestRunResponse(BaseModel):
 
 
 class ScheduledDigestWithRuns(ScheduledDigestResponse):
-    runs: List[DigestRunResponse] = []
+    runs: list[DigestRunResponse] = []
 
 
 class SessionFullResponse(BaseModel):
     id: str
-    user_id: Optional[str] = None
+    user_id: str | None = None
     name: str
     query: str
     created_at: datetime
     updated_at: datetime
-    papers: List[PaperWithDetails]
-    analyses: List[AnalysisResponse]
-    syntheses: List[SynthesisResponse]
-    conflicts: List[ConflictResponse] = []
+    papers: list[PaperWithDetails]
+    analyses: list[AnalysisResponse]
+    syntheses: list[SynthesisResponse]
+    conflicts: list[ConflictResponse] = []
 
 
 class OrchestrateResponse(BaseModel):
-    papers: List[PaperWithDetails]
-    analysis: Optional[dict]
-    citations: List[dict]
-    summaries: List[dict]
-    trace: List[dict]
-    conflicts: List[dict] = []
+    papers: list[PaperWithDetails]
+    analysis: dict | None
+    citations: list[dict]
+    summaries: list[dict]
+    trace: list[dict]
+    conflicts: list[dict] = []
 
 
 class HealthResponse(BaseModel):
     status: str
+    version: str | None = None
+    database: str | None = None
+    uptime_seconds: float | None = None
 
 
 class ConflictDetectionResult(BaseModel):
-    conflicts: List[dict]
+    conflicts: list[dict]
     summary: str
 
 
@@ -295,7 +314,7 @@ class FoundationalPaper(BaseModel):
 class GapArea(BaseModel):
     question: str
     evidence: str
-    related_papers: List[str] = []
+    related_papers: list[str] = []
     severity: str
 
 
@@ -307,9 +326,9 @@ class NextQuery(BaseModel):
 
 
 class RoadmapResponse(BaseModel):
-    foundational_papers: List[FoundationalPaper]
-    gap_areas: List[GapArea]
-    next_query_suggestions: List[NextQuery]
+    foundational_papers: list[FoundationalPaper]
+    gap_areas: list[GapArea]
+    next_query_suggestions: list[NextQuery]
 
 
 PaperWithDetails.model_rebuild()

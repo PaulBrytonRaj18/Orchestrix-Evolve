@@ -1,4 +1,4 @@
-from typing import List, Dict
+
 
 def format_authors_apa(authors):
     if not authors:
@@ -21,7 +21,7 @@ def format_authors_chicago(authors):
     return ", ".join(authors)
 
 
-def generate_citation(paper: Dict) -> Dict:
+def generate_citation(paper: dict) -> dict:
     title = paper.get("title", "Unknown Title")
     authors = paper.get("authors", [])
     year = paper.get("year", "n.d.")
@@ -40,7 +40,7 @@ def generate_citation(paper: Dict) -> Dict:
     }
 
 
-def run(papers: List[Dict]) -> List[Dict]:
+def run(papers: list[dict]) -> list[dict]:
     result = []
 
     for paper in papers:

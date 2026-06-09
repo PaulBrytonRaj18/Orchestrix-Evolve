@@ -1,16 +1,15 @@
-import asyncio
-import threading
-from datetime import datetime, timezone
-from typing import Dict, Optional, Callable
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy.orm import Session as DBSession
 import logging
+import threading
+from datetime import UTC, datetime
+from typing import Optional
 
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+from agents import citation, summarizer
+from agents.digest_scheduler import calculate_next_run, generate_digest_notification, run_digest
 from database import get_db_context
-from models import ScheduledDigest, DigestRun, Session as SessionModel, Paper
-from agents.digest_scheduler import run_digest, generate_digest_notification
-from agents import discovery, citation, summarizer
+from models import Citation, DigestRun, Paper, ScheduledDigest
+from models import Session as SessionModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,9 +17,9 @@ logger = logging.getLogger(__name__)
 
 class DigestScheduler:
     _instance: Optional["DigestScheduler"] = None
-    _scheduler: Optional[AsyncIOScheduler] = None
+    _scheduler: AsyncIOScheduler | None = None
     _lock = threading.Lock()
-    _running_jobs: Dict[str, str]
+    _running_jobs: dict[str, str]
 
     def __new__(cls) -> "DigestScheduler":
         if cls._instance is None:
@@ -42,7 +41,7 @@ class DigestScheduler:
 
     def stop(self) -> None:
         if self._scheduler and self._scheduler.running:
-            self._scheduler.shutdown(wait=False)
+            self._scheduler.shutdown(wait=True)
             logger.info("Digest scheduler stopped")
 
     def _load_active_digests(self) -> None:
@@ -50,7 +49,7 @@ class DigestScheduler:
             try:
                 active_digests = (
                     db.query(ScheduledDigest)
-                    .filter(ScheduledDigest.is_active == True)
+                    .filter(ScheduledDigest.is_active)
                     .all()
                 )
 
@@ -70,7 +69,7 @@ class DigestScheduler:
             self._scheduler.remove_job(job_id)
 
         run_time = (
-            next_run.replace(tzinfo=timezone.utc)
+            next_run.replace(tzinfo=UTC)
             if next_run.tzinfo is None
             else next_run
         )
@@ -148,7 +147,7 @@ class DigestScheduler:
 
                 if new_papers:
                     session = SessionModel(
-                        name=f"{digest.name} - Digest {datetime.now(timezone.utc).strftime('%Y-%m-%d')}",
+                        name=f"{digest.name} - Digest {datetime.now(UTC).strftime('%Y-%m-%d')}",
                         query=digest.query,
                     )
                     db.add(session)
@@ -174,21 +173,17 @@ class DigestScheduler:
                     db.commit()
 
                     citation_results = citation.run(new_papers)
-                    summary_results = await summarizer.summarize_all_papers(new_papers)
+                    await summarizer.summarize_all_papers(new_papers)
 
                     for paper_data, paper_citations in zip(
                         new_papers, citation_results
                     ):
-                        from models import Citation
-
-                        citation_obj = Citation(
+                        Citation(
                             paper_id=paper_data.get("id"),
                             apa=paper_citations.get("citation", {}).get("apa", ""),
                             mla=paper_citations.get("citation", {}).get("mla", ""),
                             ieee=paper_citations.get("citation", {}).get("ieee", ""),
-                            chicago=paper_citations.get("citation", {}).get(
-                                "chicago", ""
-                            ),
+                            chicago=paper_citations.get("citation", {}).get("chicago", ""),
                         )
 
                     db.commit()
@@ -200,10 +195,7 @@ class DigestScheduler:
                         logger.info(f"Would send email to {digest.notify_email}")
                         logger.info(f"Email content:\n{notification}")
 
-                digest.last_run_at = datetime.now(timezone.utc)
-
-                from agents.digest_scheduler import calculate_next_run
-
+                digest.last_run_at = datetime.now(UTC)
                 digest.next_run_at = calculate_next_run(
                     digest.last_run_at, digest.frequency
                 )

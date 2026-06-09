@@ -1,7 +1,7 @@
-import pytest
-import sys
 import os
-from datetime import datetime
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -11,8 +11,9 @@ os.environ["GROQ_API_KEY"] = "test-key"
 os.environ["GEMINI_API_KEY"] = "test-key"
 
 from fastapi.testclient import TestClient
+
+from database import init_db
 from main import app
-from database import init_db, engine
 
 
 @pytest.fixture(scope="module")

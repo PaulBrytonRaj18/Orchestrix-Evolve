@@ -1,14 +1,15 @@
-import pytest
-import sys
 import os
+import sys
 import tempfile
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class TestDatabaseModule:
     def test_database_imports(self):
-        from database import get_db, init_db, Base, engine
+        from database import Base, engine, get_db, init_db
 
         assert get_db is not None
         assert init_db is not None
@@ -29,7 +30,6 @@ class TestDatabaseModule:
 
 class TestDatabaseInit:
     def test_init_db_creates_tables(self):
-        import tempfile
 
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
@@ -37,7 +37,7 @@ class TestDatabaseInit:
         try:
             os.environ["DATABASE_URL"] = f"sqlite:///{db_path}"
 
-            from database import init_db, engine
+            from database import engine, init_db
 
             init_db()
 

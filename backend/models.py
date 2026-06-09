@@ -1,17 +1,19 @@
+import uuid
+
 from sqlalchemy import (
-    Column,
-    String,
-    Integer,
-    Float,
-    Text,
-    DateTime,
-    ForeignKey,
     JSON,
     Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-import uuid
 
 from database import Base
 
@@ -94,6 +96,11 @@ class Paper(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    __table_args__ = (
+        Index("idx_papers_session_created", "session_id", "created_at"),
+        Index("idx_papers_session_external", "session_id", "external_id"),
+    )
+
     session = relationship("Session", back_populates="papers")
     summary = relationship(
         "Summary", back_populates="paper", uselist=False, cascade="all, delete-orphan"
@@ -114,6 +121,10 @@ class Analysis(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_analyses_session_type", "session_id", "analysis_type"),
     )
 
     session = relationship("Session", back_populates="analyses")
@@ -200,6 +211,10 @@ class Conflict(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    __table_args__ = (
+        Index("idx_conflicts_session_severity", "session_id", "severity"),
+    )
+
     session = relationship("Session", back_populates="conflicts")
 
 
@@ -242,6 +257,10 @@ class DigestRun(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("idx_digest_runs_sched_status", "scheduled_digest_id", "status"),
     )
 
     scheduled_digest = relationship("ScheduledDigest", back_populates="runs")

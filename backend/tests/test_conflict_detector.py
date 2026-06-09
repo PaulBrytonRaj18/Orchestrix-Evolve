@@ -1,21 +1,21 @@
-import pytest
-import asyncio
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.conflict_detector import (
-    normalize_text,
-    extract_keywords,
-    detect_semantic_contradiction,
-    detect_scale_contradiction,
-    detect_methodology_contradiction,
-    detect_temporal_contradiction,
-    detect_citation_contradiction,
     detect_author_dominance_contradiction,
-    detect_keyword_mismatch,
+    detect_citation_contradiction,
     detect_conflicts,
+    detect_keyword_mismatch,
+    detect_methodology_contradiction,
+    detect_scale_contradiction,
+    detect_semantic_contradiction,
+    detect_temporal_contradiction,
+    extract_keywords,
+    normalize_text,
 )
 
 
@@ -45,7 +45,10 @@ class TestNormalizeText:
 
 class TestExtractKeywords:
     def test_extract_from_text(self):
-        text = "Machine learning and deep learning are popular methods for artificial intelligence research"
+        text = (
+            "Machine learning and deep learning are popular"
+            " methods for artificial intelligence research"
+        )
         keywords = extract_keywords(text)
         assert "machine" in keywords
         assert "learning" in keywords
@@ -88,19 +91,17 @@ class TestDetectSemanticContradiction:
         text1 = "The method uses neural networks"
         text2 = "Neural networks are effective for this task"
         is_contradict, reason = detect_semantic_contradiction(text1, text2)
-        assert is_contradict == False
+        assert not is_contradict
 
     def test_insufficient_common_keywords(self):
         text1 = "unique word1 word2"
         text2 = "different word3 word4"
         is_contradict, reason = detect_semantic_contradiction(text1, text2)
-        assert is_contradict == False
-
-    def test_insufficient_common_keywords(self):
+        assert not is_contradict
         text1 = "unique word1 word2"
         text2 = "different word3 word4"
         is_contradict, reason = detect_semantic_contradiction(text1, text2)
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectScaleContradiction:
@@ -117,7 +118,7 @@ class TestDetectScaleContradiction:
         analysis_data = {}
         summarization = {"abstract_compression": "Stable results", "limitations": ""}
         is_contradict, reason = detect_scale_contradiction(analysis_data, summarization)
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectMethodologyContradiction:
@@ -127,7 +128,7 @@ class TestDetectMethodologyContradiction:
         is_contradict, reason = detect_methodology_contradiction(
             analysis_keywords, methodology
         )
-        assert is_contradict == True
+        assert is_contradict
 
     def test_methodology_matches(self):
         analysis_keywords = ["machine", "learning", "neural"]
@@ -135,11 +136,11 @@ class TestDetectMethodologyContradiction:
         is_contradict, reason = detect_methodology_contradiction(
             analysis_keywords, methodology
         )
-        assert is_contradict == False
+        assert not is_contradict
 
     def test_empty_methodology(self):
         is_contradict, reason = detect_methodology_contradiction(["test"], "")
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectTemporalContradiction:
@@ -160,7 +161,7 @@ class TestDetectTemporalContradiction:
         is_contradict, reason = detect_temporal_contradiction(
             analysis_data, summarization
         )
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectCitationContradiction:
@@ -182,7 +183,7 @@ class TestDetectCitationContradiction:
         analysis_data = {"citation_distribution": []}
         papers = []
         is_contradict, reason = detect_citation_contradiction(analysis_data, papers)
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectAuthorDominanceContradiction:
@@ -210,7 +211,7 @@ class TestDetectAuthorDominanceContradiction:
         is_contradict, reason = detect_author_dominance_contradiction(
             analysis_data, papers
         )
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectKeywordMismatch:
@@ -235,7 +236,7 @@ class TestDetectKeywordMismatch:
         }
         papers = [{"summary": {"key_contributions": "Machine learning approach"}}]
         is_contradict, reason = detect_keyword_mismatch(analysis_data, papers)
-        assert is_contradict == False
+        assert not is_contradict
 
 
 class TestDetectConflictsAsync:

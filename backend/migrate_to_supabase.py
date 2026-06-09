@@ -15,9 +15,8 @@ Options:
 """
 
 import argparse
-import sys
 import logging
-from datetime import datetime
+import sys
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
@@ -48,8 +47,8 @@ def export_sqlite_data(db_path):
         from sqlalchemy.orm import sessionmaker
 
         engine = create_engine(f"sqlite:///{db_path}")
-        Session = sessionmaker(bind=engine)
-        session = Session()
+        session_maker = sessionmaker(bind=engine)
+        session = session_maker()
 
         inspector = inspect(engine)
         tables = inspector.get_table_names()
@@ -82,10 +81,12 @@ def export_sqlite_data(db_path):
 def create_postgresql_tables(target_url):
     """Create tables in PostgreSQL using SQLAlchemy models."""
     try:
-        from sqlalchemy import create_engine
-        from database import Base, init_db
         import os
+
         from dotenv import load_dotenv
+        from sqlalchemy import create_engine
+
+        from database import Base
 
         load_dotenv()
 
@@ -117,24 +118,27 @@ def migrate_data(data, target_url):
     try:
         from sqlalchemy import create_engine
         from sqlalchemy.orm import sessionmaker
+
         from models import (
-            User,
-            Session as SessionModel,
-            Paper,
             Analysis,
+            Citation,
+            Conflict,
+            DigestRun,
+            Note,
+            Paper,
+            Roadmap,
+            ScheduledDigest,
             Summary,
             Synthesis,
-            Citation,
-            Note,
-            Conflict,
-            ScheduledDigest,
-            DigestRun,
-            Roadmap,
+            User,
+        )
+        from models import (
+            Session as SessionModel,
         )
 
         engine = create_engine(target_url)
-        Session = sessionmaker(bind=engine)
-        session = Session()
+        session_maker = sessionmaker(bind=engine)
+        session = session_maker()
 
         model_mapping = {
             "users": User,
@@ -182,6 +186,7 @@ def main():
     args = parse_args()
 
     import os
+
     from dotenv import load_dotenv
 
     load_dotenv()

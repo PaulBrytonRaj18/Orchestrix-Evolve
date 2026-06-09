@@ -1,19 +1,19 @@
-import pytest
 import asyncio
-from datetime import datetime
-
-import sys
 import os
+import sys
+
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.roadmap import (
     _compute_weighted_score,
+    _extract_keywords_from_papers,
+    _generate_next_queries,
+    _get_summary_text,
     _identify_foundational_papers,
     _identify_gap_areas,
-    _generate_next_queries,
-    _extract_keywords_from_papers,
-    _get_summary_text,
-    run
+    run,
 )
 
 
@@ -97,9 +97,11 @@ class TestIdentifyGapAreas:
         analysis_data = {"keyword_frequency": [], "emerging_topics": []}
         summaries = []
         notes = []
-        conflicts = [
-            {"severity": "high", "title": "Methodology conflict", "description": "Different methods used"}
-        ]
+        conflicts = [{
+            "severity": "high",
+            "title": "Methodology conflict",
+            "description": "Different methods used",
+        }]
         result = _identify_gap_areas(papers, analysis_data, summaries, notes, conflicts)
         assert any("Methodology conflict" in gap["question"] for gap in result)
 
@@ -129,9 +131,10 @@ class TestIdentifyGapAreas:
 
 class TestExtractKeywordsFromPapers:
     def test_extracts_title_keywords(self):
-        papers = [
-            {"title": "Deep Learning for Image Recognition", "abstract": "This paper presents a new approach."}
-        ]
+        papers = [{
+            "title": "Deep Learning for Image Recognition",
+            "abstract": "This paper presents a new approach.",
+        }]
         keywords = _extract_keywords_from_papers(papers)
         assert "learning" in keywords or "image" in keywords or "recognition" in keywords
 
@@ -224,8 +227,14 @@ class TestGenerateNextQueries:
 class TestRunFunction:
     def test_returns_valid_structure(self):
         papers = [
-            {"id": "1", "title": "Test Paper 1", "year": 2020, "citation_count": 100, "abstract": "Test abstract 1"},
-            {"id": "2", "title": "Test Paper 2", "year": 2021, "citation_count": 200, "abstract": "Test abstract 2"},
+            {
+                "id": "1", "title": "Test Paper 1", "year": 2020,
+                "citation_count": 100, "abstract": "Test abstract 1",
+            },
+            {
+                "id": "2", "title": "Test Paper 2", "year": 2021,
+                "citation_count": 200, "abstract": "Test abstract 2",
+            },
         ]
         analysis_data = {
             "publication_trend": [{"year": 2020, "count": 1}],
@@ -240,7 +249,9 @@ class TestRunFunction:
         notes = []
         conflicts = []
 
-        result = asyncio.run(run(papers, analysis_data, summaries, notes, conflicts, "test-session"))
+        result = asyncio.run(
+            run(papers, analysis_data, summaries, notes, conflicts, "test-session")
+        )
 
         assert "foundational_papers" in result
         assert "gap_areas" in result
@@ -262,7 +273,9 @@ class TestRunFunction:
         notes = []
         conflicts = []
 
-        result = asyncio.run(run(papers, analysis_data, summaries, notes, conflicts, "test-session"))
+        result = asyncio.run(
+            run(papers, analysis_data, summaries, notes, conflicts, "test-session")
+        )
 
         assert len(result["foundational_papers"]) >= 0
         assert len(result["gap_areas"]) >= 0
@@ -278,7 +291,9 @@ class TestRunFunction:
         notes = []
         conflicts = []
 
-        result = asyncio.run(run(papers, analysis_data, summaries, notes, conflicts, "test-session"))
+        result = asyncio.run(
+            run(papers, analysis_data, summaries, notes, conflicts, "test-session")
+        )
 
         for paper in result["foundational_papers"]:
             assert "paper_id" in paper
@@ -295,7 +310,9 @@ class TestRunFunction:
         notes = []
         conflicts = []
 
-        result = asyncio.run(run(papers, analysis_data, summaries, notes, conflicts, "test-session"))
+        result = asyncio.run(
+            run(papers, analysis_data, summaries, notes, conflicts, "test-session")
+        )
 
         for gap in result["gap_areas"]:
             assert "question" in gap
@@ -310,7 +327,9 @@ class TestRunFunction:
         notes = []
         conflicts = []
 
-        result = asyncio.run(run(papers, analysis_data, summaries, notes, conflicts, "test-session"))
+        result = asyncio.run(
+            run(papers, analysis_data, summaries, notes, conflicts, "test-session")
+        )
 
         for query in result["next_query_suggestions"]:
             assert "query" in query

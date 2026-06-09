@@ -1,69 +1,26 @@
 import re
 
+from constants import STOPWORDS
+
 NEGATION_WORDS = {
-    "not",
-    "no",
-    "never",
-    "neither",
-    "nor",
-    "none",
-    "nothing",
-    "cannot",
-    "can't",
-    "won't",
-    "wouldn't",
-    "shouldn't",
-    "couldn't",
-    "isn't",
-    "aren't",
-    "wasn't",
-    "weren't",
-    "doesn't",
-    "don't",
-    "haven't",
-    "hasn't",
-    "hadn't",
-    "but",
-    "however",
-    "although",
-    "unlike",
-    "contrary",
-    "opposite",
-    "instead",
-    "rather",
+    "not", "no", "never", "neither", "nor", "none", "nothing",
+    "cannot", "can't", "won't", "wouldn't", "shouldn't", "couldn't",
+    "isn't", "aren't", "wasn't", "weren't", "doesn't", "don't",
+    "haven't", "hasn't", "hadn't",
+    "but", "however", "although", "unlike", "contrary", "opposite",
+    "instead", "rather",
 }
 
 CONFLICT_INDICATORS = [
-    "contradict",
-    "conflict",
-    "disagree",
-    "oppose",
-    "contrast",
-    "however",
-    "whereas",
-    "but",
-    "yet",
-    "despite",
-    "although",
-    "unlike",
-    "whereas",
-    "while",
-    "nevertheless",
-    "nonetheless",
+    "contradict", "conflict", "disagree", "oppose", "contrast",
+    "however", "whereas", "but", "yet", "despite", "although",
+    "unlike", "whereas", "while", "nevertheless", "nonetheless",
 ]
 
 SCALE_WORDS = {
-    "high": [
-        "high",
-        "large",
-        "significant",
-        "major",
-        "substantial",
-        "dramatic",
-        "steep",
-    ],
+    "high": ["high", "large", "significant", "major", "substantial", "dramatic", "steep"],
     "low": ["low", "small", "minor", "insignificant", "minimal", "slight", "modest"],
-    "increase": ["increase", "increase", "grow", "rise", "improve", "enhance", "boost"],
+    "increase": ["increase", "grow", "rise", "improve", "enhance", "boost"],
     "decrease": ["decrease", "reduce", "lower", "decline", "drop", "worsen", "degrade"],
 }
 
@@ -80,100 +37,7 @@ def normalize_text(text: str) -> str:
 def extract_keywords(text: str, top_n: int = 20) -> list[str]:
     normalized = normalize_text(text)
     words = normalized.split()
-    stopwords = {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "but",
-        "in",
-        "on",
-        "at",
-        "to",
-        "for",
-        "of",
-        "with",
-        "by",
-        "from",
-        "as",
-        "is",
-        "was",
-        "are",
-        "were",
-        "been",
-        "be",
-        "have",
-        "has",
-        "had",
-        "do",
-        "does",
-        "did",
-        "will",
-        "would",
-        "could",
-        "should",
-        "may",
-        "might",
-        "must",
-        "shall",
-        "can",
-        "this",
-        "that",
-        "these",
-        "those",
-        "i",
-        "you",
-        "he",
-        "she",
-        "it",
-        "we",
-        "they",
-        "what",
-        "which",
-        "who",
-        "whom",
-        "when",
-        "where",
-        "why",
-        "how",
-        "all",
-        "each",
-        "every",
-        "both",
-        "few",
-        "more",
-        "most",
-        "other",
-        "some",
-        "such",
-        "no",
-        "nor",
-        "not",
-        "only",
-        "own",
-        "same",
-        "so",
-        "than",
-        "too",
-        "very",
-        "just",
-        "about",
-        "into",
-        "through",
-        "during",
-        "before",
-        "after",
-        "above",
-        "below",
-        "between",
-        "under",
-        "again",
-        "further",
-        "then",
-        "once",
-    }
-    keywords = [w for w in words if len(w) > 3 and w not in stopwords]
+    keywords = [w for w in words if len(w) > 3 and w not in STOPWORDS]
     return keywords[:top_n]
 
 
@@ -184,11 +48,7 @@ def detect_semantic_contradiction(text1: str, text2: str) -> tuple[bool, str]:
     words1 = set(norm1.split())
     words2 = set(norm2.split())
 
-    negation_found = False
-    for word in NEGATION_WORDS:
-        if word in words1 or word in words2:
-            negation_found = True
-            break
+    negation_found = any(word in words1 or word in words2 for word in NEGATION_WORDS)
 
     common_keywords = words1.intersection(words2)
     if len(common_keywords) < 3:
@@ -276,13 +136,8 @@ def detect_temporal_contradiction(
     )
 
     historical_indicators = {
-        "traditional",
-        "older",
-        "classical",
-        "legacy",
-        "outdated",
-        "previous",
-        "earlier",
+        "traditional", "older", "classical", "legacy",
+        "outdated", "previous", "earlier",
     }
     if recent_keywords and any(ind in summary_text for ind in historical_indicators):
         return (
@@ -303,10 +158,10 @@ def detect_citation_contradiction(
     if total_papers == 0:
         return False, ""
 
-    highly_cited = 0
-    for bucket in citation_dist:
-        if bucket.get("bucket", "") in ["201-1000", "1000+"]:
-            highly_cited += bucket.get("count", 0)
+    highly_cited = sum(
+        b.get("count", 0) for b in citation_dist
+        if b.get("bucket", "") in ["201-1000", "1000+"]
+    )
 
     highly_cited_ratio = highly_cited / total_papers if total_papers > 0 else 0
 
@@ -402,13 +257,6 @@ def detect_keyword_mismatch(
 async def detect_conflicts(
     papers: list[dict], analysis_data: dict, summarizations: list[dict]
 ) -> dict:
-    """
-    Detects conflicts between Analysis Agent insights and Summarization Agent outputs.
-
-    Returns a dict with:
-    - conflicts: List of detected conflict objects
-    - summary: Human-readable summary of conflicts found
-    """
     conflicts = []
 
     paper_summaries = {}
@@ -443,98 +291,84 @@ async def detect_conflicts(
             str(analysis_keywords), all_summary_text
         )
         if is_contradict:
-            conflicts.append(
-                {
-                    "conflict_type": "semantic_contradiction",
-                    "severity": "medium",
-                    "title": "Semantic Contradiction in Paper Analysis",
-                    "description": reason,
-                    "analysis_insight": f"Analysis highlights: {', '.join(analysis_keywords[:10])}",
-                    "summarization_insight": f"Summary states: {abstract[:200]}...",
-                    "paper_id": paper_id,
-                }
-            )
+            conflicts.append({
+                "conflict_type": "semantic_contradiction",
+                "severity": "medium",
+                "title": "Semantic Contradiction in Paper Analysis",
+                "description": reason,
+                "analysis_insight": f"Analysis highlights: {', '.join(analysis_keywords[:10])}",
+                "summarization_insight": f"Summary states: {abstract[:200]}...",
+                "paper_id": paper_id,
+            })
 
         is_contradict, reason = detect_methodology_contradiction(
             analysis_keywords, methodology
         )
         if is_contradict:
-            conflicts.append(
-                {
-                    "conflict_type": "methodology_mismatch",
-                    "severity": "low",
-                    "title": "Methodology Alignment Issue",
-                    "description": reason,
-                    "analysis_insight": f"Primary keywords: {', '.join(analysis_keywords[:10])}",
-                    "summarization_insight": f"Methodology: {methodology[:150]}...",
-                    "paper_id": paper_id,
-                }
-            )
+            conflicts.append({
+                "conflict_type": "methodology_mismatch",
+                "severity": "low",
+                "title": "Methodology Alignment Issue",
+                "description": reason,
+                "analysis_insight": f"Primary keywords: {', '.join(analysis_keywords[:10])}",
+                "summarization_insight": f"Methodology: {methodology[:150]}...",
+                "paper_id": paper_id,
+            })
 
     is_contradict, reason = detect_temporal_contradiction(analysis_data, {})
     if is_contradict:
         emerging = [t.get("word") for t in (analysis_data.get("emerging_topics", []) or [])[:5]]
-        conflicts.append(
-            {
-                "conflict_type": "temporal_contradiction",
-                "severity": "high",
-                "title": "Temporal Perspective Conflict",
-                "description": reason,
-                "analysis_insight": f"Emerging topics: {emerging}",
-                "summarization_insight": "Summary contains historical/traditional references",
-                "paper_id": None,
-            }
-        )
+        conflicts.append({
+            "conflict_type": "temporal_contradiction",
+            "severity": "high",
+            "title": "Temporal Perspective Conflict",
+            "description": reason,
+            "analysis_insight": f"Emerging topics: {emerging}",
+            "summarization_insight": "Summary contains historical/traditional references",
+            "paper_id": None,
+        })
 
     is_contradict, reason = detect_citation_contradiction(analysis_data, papers)
     if is_contradict:
-        conflicts.append(
-            {
-                "conflict_type": "citation_impact_contradiction",
-                "severity": "medium",
-                "title": "Citation Impact vs Perceived Limitations",
-                "description": reason,
-                "analysis_insight": "Citation distribution shows highly cited papers",
-                "summarization_insight": "Multiple papers mention limited impact",
-                "paper_id": None,
-            }
-        )
+        conflicts.append({
+            "conflict_type": "citation_impact_contradiction",
+            "severity": "medium",
+            "title": "Citation Impact vs Perceived Limitations",
+            "description": reason,
+            "analysis_insight": "Citation distribution shows highly cited papers",
+            "summarization_insight": "Multiple papers mention limited impact",
+            "paper_id": None,
+        })
 
     is_contradict, reason = detect_author_dominance_contradiction(analysis_data, papers)
     if is_contradict:
-        conflicts.append(
-            {
-                "conflict_type": "author_impact_contradiction",
-                "severity": "low",
-                "title": "Author Dominance vs Contribution Visibility",
-                "description": reason,
-                "analysis_insight": "Top authors by publication count",
-                "summarization_insight": "Dominant authors' contributions underemphasized",
-                "paper_id": None,
-            }
-        )
+        conflicts.append({
+            "conflict_type": "author_impact_contradiction",
+            "severity": "low",
+            "title": "Author Dominance vs Contribution Visibility",
+            "description": reason,
+            "analysis_insight": "Top authors by publication count",
+            "summarization_insight": "Dominant authors' contributions underemphasized",
+            "paper_id": None,
+        })
 
     is_contradict, reason = detect_keyword_mismatch(analysis_data, papers)
     if is_contradict:
-        conflicts.append(
-            {
-                "conflict_type": "keyword_mismatch",
-                "severity": "medium",
-                "title": "Analysis vs Summary Keyword Discrepancy",
-                "description": reason,
-                "analysis_insight": (
-                    "Analysis keywords: "
-                    + ", ".join(
-                        str(k.get("word", ""))
-                        if isinstance(k, dict)
-                        else str(k)
-                        for k in analysis_data.get("keyword_frequency", [])[:10]
-                    )
-                ),
-                "summarization_insight": "Summaries focus on different themes",
-                "paper_id": None,
-            }
-        )
+        conflicts.append({
+            "conflict_type": "keyword_mismatch",
+            "severity": "medium",
+            "title": "Analysis vs Summary Keyword Discrepancy",
+            "description": reason,
+            "analysis_insight": (
+                "Analysis keywords: "
+                + ", ".join(
+                    k.get("word") if isinstance(k, dict) else str(k)
+                    for k in list(analysis_data.get("keyword_frequency", [])[:10])
+                )
+            ),
+            "summarization_insight": "Summaries focus on different themes",
+            "paper_id": None,
+        })
 
     high_severity = sum(1 for c in conflicts if c.get("severity") == "high")
     medium_severity = sum(1 for c in conflicts if c.get("severity") == "medium")

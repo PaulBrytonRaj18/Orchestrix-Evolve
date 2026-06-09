@@ -1,33 +1,34 @@
-import pytest
-import sys
 import os
+import sys
 from datetime import datetime
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from schemas import (
+    AnalysisResponse,
+    CitationResponse,
+    ConflictDetectionResult,
+    ConflictResolve,
+    ConflictResponse,
+    DigestRunResponse,
+    HealthResponse,
+    NoteCreate,
+    NoteResponse,
+    OrchestrateResponse,
+    PaperWithDetails,
+    RoadmapResponse,
+    ScheduledDigestCreate,
+    ScheduledDigestResponse,
+    SessionCreate,
+    SessionFullResponse,
+    SessionResponse,
+    SummaryResponse,
     UserCreate,
     UserLogin,
     UserResponse,
     UserUpdate,
-    SessionCreate,
-    SessionResponse,
-    SessionFullResponse,
-    PaperWithDetails,
-    AnalysisResponse,
-    SummaryResponse,
-    CitationResponse,
-    NoteCreate,
-    NoteResponse,
-    ConflictResponse,
-    ConflictResolve,
-    ConflictDetectionResult,
-    ScheduledDigestCreate,
-    ScheduledDigestResponse,
-    DigestRunResponse,
-    RoadmapResponse,
-    OrchestrateResponse,
-    HealthResponse,
 )
 
 
@@ -67,7 +68,7 @@ class TestUserSchemas:
             created_at=now,
         )
         assert response.id == "user-123"
-        assert response.is_active == True
+        assert response.is_active
 
     def test_user_update_partial(self):
         update = UserUpdate(username="newusername")
@@ -241,7 +242,7 @@ class TestConflictSchemas:
             updated_at=now,
         )
         assert conflict.conflict_type == "semantic_contradiction"
-        assert conflict.resolved == False
+        assert not conflict.resolved
 
     def test_conflict_resolve(self):
         resolve = ConflictResolve(resolution_notes="Resolved by manual review")
@@ -327,7 +328,7 @@ class TestRoadmapSchemas:
         assert len(response.gap_areas) == 1
 
     def test_orchestrate_response(self):
-        now = datetime.now()
+        datetime.now()
         response = OrchestrateResponse(
             papers=[],
             analysis={"publication_trend": []},

@@ -1,10 +1,10 @@
-import json
-import os
 import asyncio
-import time
+import json
 import logging
+import os
+import time
+
 from dotenv import load_dotenv
-from typing import List, Dict, Optional
 from groq import AsyncGroq
 
 load_dotenv()
@@ -33,7 +33,7 @@ _semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
 # ─────────────────────────── UTILS ───────────────────────────
 
 
-def _truncate(text: Optional[str], limit: int = 300) -> str:
+def _truncate(text: str | None, limit: int = 300) -> str:
     return (text or "")[:limit]
 
 
@@ -44,7 +44,7 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
-def _safe_json(text: str) -> Optional[Dict]:
+def _safe_json(text: str) -> dict | None:
     try:
         return json.loads(text)
     except Exception:
@@ -57,7 +57,7 @@ def _safe_json(text: str) -> Optional[Dict]:
         return None
 
 
-def _confidence(paper: Dict) -> float:
+def _confidence(paper: dict) -> float:
     score = 0.0
     if paper.get("title"):
         score += 0.5
@@ -66,7 +66,7 @@ def _confidence(paper: Dict) -> float:
     return round(score / 2, 2)
 
 
-def _deduplicate(docs: List[Dict]) -> List[Dict]:
+def _deduplicate(docs: list[dict]) -> list[dict]:
     seen, result = set(), []
     for d in docs:
         key = d.get("title", "").lower().strip()
@@ -76,7 +76,7 @@ def _deduplicate(docs: List[Dict]) -> List[Dict]:
     return result
 
 
-def _detect_conflicts(docs: List[Dict]) -> List[str]:
+def _detect_conflicts(docs: list[dict]) -> list[str]:
     years = {d.get("year") for d in docs if d.get("year")}
     return ["Different publication years detected"] if len(years) > 1 else []
 
@@ -130,7 +130,9 @@ async def _call_groq(prompt: str) -> str:
         wait_time = window_duration - (current_time - _rate_limit_state["window_start"])
         if wait_time > 0:
             logger.warning(
-                f"Rate limit reached ({_rate_limit_state['requests_per_minute']} req/min). Waiting {wait_time:.1f}s"
+                "Rate limit reached (%d req/min). Waiting %.1fs",
+                _rate_limit_state["requests_per_minute"],
+                wait_time,
             )
             await asyncio.sleep(wait_time)
         current_time = time.time()
@@ -161,7 +163,7 @@ async def _call_groq(prompt: str) -> str:
                 timeout=REQUEST_TIMEOUT,
             )
             return _clean(res.choices[0].message.content)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.error("Groq API request timed out")
             raise Exception("Groq API request timed out")
         except Exception as e:
@@ -172,7 +174,7 @@ async def _call_groq(prompt: str) -> str:
 # ─────────────────────────── SINGLE PAPER ────────────────────
 
 
-def _build_single_prompt(paper: Dict) -> str:
+def _build_single_prompt(paper: dict) -> str:
     return f"""
 Summarize this research paper.
 
@@ -197,7 +199,7 @@ Return ONLY this JSON (no extra text):
 """
 
 
-async def _summarize_one(paper: Dict) -> Dict:
+async def _summarize_one(paper: dict) -> dict:
     """Summarize a single paper asynchronously."""
     try:
         raw = await _call_groq(_build_single_prompt(paper))
@@ -215,8 +217,8 @@ async def _summarize_one(paper: Dict) -> Dict:
 
 
 async def summarize_all_papers(
-    papers: List[Dict], purpose: str = "general"
-) -> List[Dict]:
+    papers: list[dict], purpose: str = "general"
+) -> list[dict]:
     """
     🚀 Summarize ALL papers in parallel with a single gather call.
     Replaces the old one-by-one loop — latency = slowest single call, not sum of all.
@@ -237,7 +239,7 @@ async def summarize_all_papers(
 # ─────────────────────────── MULTI-DOC COMPARE ───────────────
 
 
-def _build_multi_prompt(docs: List[Dict], conflicts: List[str]) -> str:
+def _build_multi_prompt(docs: list[dict], conflicts: list[str]) -> str:
     docs_text = "\n\n".join(
         f"[{i + 1}] {d.get('title', 'Untitled')} ({d.get('year', '?')}): "
         f"{_truncate(d.get('abstract'))}"
@@ -266,7 +268,7 @@ Return ONLY this JSON (no extra text):
 """
 
 
-async def summarize_documents(docs: List[Dict], purpose: str = "general") -> Dict:
+async def summarize_documents(docs: list[dict], purpose: str = "general") -> dict:
     """
     Produce a unified comparative summary for a list of papers.
     Also runs individual summaries concurrently so the UI can show
@@ -296,7 +298,7 @@ async def summarize_documents(docs: List[Dict], purpose: str = "general") -> Dic
 # ─────────────────────────── SYNTHESIS ───────────────────────
 
 
-async def synthesize_papers(papers: List[Dict], purpose: str = "academic") -> str:
+async def synthesize_papers(papers: list[dict], purpose: str = "academic") -> str:
     """
     Entry point for the Discovery Agent → UI pipeline.
     Returns the unified summary string (fast path).
@@ -312,7 +314,7 @@ async def synthesize_papers(papers: List[Dict], purpose: str = "academic") -> st
 # ─────────────────────────── FULL PIPELINE ───────────────────
 
 
-async def run_full_pipeline(papers: List[Dict], purpose: str = "academic") -> Dict:
+async def run_full_pipeline(papers: list[dict], purpose: str = "academic") -> dict:
     """
     🏎️  One call to rule them all.
     Returns a structured payload the UI can render immediately:

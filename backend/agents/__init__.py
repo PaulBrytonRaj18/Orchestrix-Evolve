@@ -1,10 +1,12 @@
-from . import discovery
-from . import analysis
-from . import citation
-from . import summarizer
-from . import conflict_detector
-from . import digest_scheduler
-from . import roadmap
+from . import (
+    analysis,
+    citation,
+    conflict_detector,
+    digest_scheduler,
+    discovery,
+    roadmap,
+    summarizer,
+)
 
 __all__ = [
     "discovery",

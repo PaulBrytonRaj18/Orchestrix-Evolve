@@ -1,14 +1,15 @@
-import pytest
-import sys
 import os
+import sys
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.citation import (
     format_authors_apa,
-    format_authors_mla,
-    format_authors_ieee,
     format_authors_chicago,
+    format_authors_ieee,
+    format_authors_mla,
     generate_citation,
     run,
 )

@@ -1,18 +1,17 @@
-from datetime import datetime, timezone
-from typing import Dict, List
 import asyncio
 import logging
+from datetime import UTC, datetime
 
-from agents import discovery, analysis, citation, summarizer, conflict_detector, roadmap
+from agents import analysis, citation, conflict_detector, discovery, roadmap, summarizer
 
 logger = logging.getLogger(__name__)
 
-_session_locks: Dict[str, asyncio.Lock] = {}
+_session_locks: dict[str, asyncio.Lock] = {}
 _locks_lock = asyncio.Lock()
 
 
 def utcnow():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 async def _get_session_lock(session_id: str) -> asyncio.Lock:
@@ -22,7 +21,7 @@ async def _get_session_lock(session_id: str) -> asyncio.Lock:
         return _session_locks[session_id]
 
 
-async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
+async def orchestrate(query: str, session_id: str, page: int = 0) -> dict:
     """
     Central orchestration layer that coordinates all agents and records trace log.
     Includes conflict detection between Analysis and Summarization agents.
@@ -94,7 +93,7 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
         conflicts = conflict_result.get("conflicts", [])
 
         if conflicts:
-            conflict_summary = conflict_result.get(
+            conflict_result.get(
                 "summary", f"Detected {len(conflicts)} conflicts"
             )
             trace[-1] = {
@@ -146,9 +145,11 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> Dict:
         trace[-1] = {
             **trace[-1],
             "status": "done",
-            "result": f"Roadmap generated: {len(roadmap_result['foundational_papers'])} foundational papers, "
-            f"{len(roadmap_result['gap_areas'])} gaps, "
-            f"{len(roadmap_result['next_query_suggestions'])} query suggestions",
+            "result": (
+                f"Roadmap generated: {len(roadmap_result['foundational_papers'])} papers, "
+                f"{len(roadmap_result['gap_areas'])} gaps, "
+                f"{len(roadmap_result['next_query_suggestions'])} queries"
+            ),
         }
     else:
         trace.append(

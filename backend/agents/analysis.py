@@ -1,12 +1,10 @@
 import re
 from collections import Counter
-from datetime import datetime
-from typing import List, Dict
 
 from constants import STOPWORDS
 
 
-def tokenize(text: str) -> List[str]:
+def tokenize(text: str) -> list[str]:
     if not text:
         return []
     text = text.lower()
@@ -15,7 +13,7 @@ def tokenize(text: str) -> List[str]:
     return tokens
 
 
-def compute_keyword_frequency(papers: List[Dict], top_n: int = 40) -> List[Dict]:
+def compute_keyword_frequency(papers: list[dict], top_n: int = 40) -> list[dict]:
     all_text = ""
     for paper in papers:
         title = paper.get("title", "") or ""
@@ -29,7 +27,7 @@ def compute_keyword_frequency(papers: List[Dict], top_n: int = 40) -> List[Dict]
     return [{"word": word, "count": count} for word, count in top_words]
 
 
-async def run(papers: List[Dict]) -> Dict:
+async def run(papers: list[dict]) -> dict:
     """
     Analysis Agent: Analyzes papers and generates 5 types of analysis:
     - publication_trend: Papers per year
