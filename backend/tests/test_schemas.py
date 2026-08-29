@@ -37,8 +37,8 @@ class TestUserSchemas:
         user = UserCreate(
             email="test@example.com",
             username="testuser",
-            password="securepassword123",
-            confirm_password="securepassword123",
+            password="SecurePass123!",
+            confirm_password="SecurePass123!",
         )
         assert user.email == "test@example.com"
         assert user.username == "testuser"
@@ -47,10 +47,10 @@ class TestUserSchemas:
         user = UserCreate(
             email="test@example.com",
             username="testuser",
-            password="password1",
+            password="SecurePass123!",
             confirm_password="password2",
         )
-        assert user.password == "password1"
+        assert user.password == "SecurePass123!"
         assert user.confirm_password == "password2"
 
     def test_user_login_valid(self):
