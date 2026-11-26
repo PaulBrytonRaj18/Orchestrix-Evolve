@@ -1,165 +1,101 @@
-import os
+"""Database engine and session management (one code path for SQLite and Postgres)."""
+
+from __future__ import annotations
+
 from collections.abc import Generator
 from contextlib import contextmanager
 
-from dotenv import load_dotenv
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-load_dotenv()
+from config import get_settings
 
-DATABASE_URL = os.getenv("DATABASE_URL", "")
-SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL", "")
-USE_ASYNC = os.getenv("USE_ASYNC", "false").lower() == "true"
-
-if SUPABASE_DB_URL:
-    DATABASE_URL = SUPABASE_DB_URL
+settings = get_settings()
+DATABASE_URL = settings.resolved_database_url
 
 
-def is_postgres():
-    return DATABASE_URL and (
-        "postgres" in DATABASE_URL.lower() or "postgresql" in DATABASE_URL.lower()
-    )
+class Base(DeclarativeBase):
+    pass
 
 
-if is_postgres():
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session, declarative_base, sessionmaker
-    from sqlalchemy.pool import QueuePool
+def is_postgres() -> bool:
+    return DATABASE_URL.startswith("postgresql")
 
-    # Connection settings for Supabase/PostgreSQL
-    CONNECT_ARGS = {
-        "connect_timeout": 10,
-        "options": "-c statement_timeout=30000",  # 30 second query timeout
-    }
 
-    # Check if SSL is explicitly disabled for local development
-    DISABLE_SSL = os.getenv("DISABLE_DB_SSL", "false").lower() == "true"
+def _build_engine():
+    if is_postgres():
+        return create_engine(
+            DATABASE_URL,
+            pool_size=settings.db_pool_size,
+            max_overflow=settings.db_max_overflow,
+            pool_pre_ping=True,
+            pool_recycle=1800,
+            connect_args={
+                "connect_timeout": 10,
+                "options": "-c statement_timeout=30000",
+                # Supabase's transaction pooler (port 6543) does not support
+                # server-side prepared statements.
+                "prepare_threshold": None,
+            },
+        )
+    eng = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
-    engine = create_engine(
-        DATABASE_URL,
-        poolclass=QueuePool,
-        pool_size=10,
-        max_overflow=20,
-        pool_pre_ping=True,
-        pool_recycle=3600,
-        echo=False,
-        connect_args=CONNECT_ARGS,
-    )
+    @event.listens_for(eng, "connect")
+    def _sqlite_fk_on(dbapi_conn, _):  # make SQLite enforce FKs like Postgres does
+        dbapi_conn.execute("PRAGMA foreign_keys=ON")
 
-    # Supabase requires SSL - ensure it's enabled unless explicitly disabled
-    if not DISABLE_SSL:
+    return eng
 
-        # For Supabase, use SSL but be resilient to connection issues
-        pass  # psycopg2 handles SSL automatically with default settings
 
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base = declarative_base()
+engine = _build_engine()
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
-    def get_db() -> Generator[Session, None, None]:
-        db = SessionLocal()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
 
-    @contextmanager
-    def get_db_context() -> Generator[Session, None, None]:
-        db = SessionLocal()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+def get_db() -> Generator[Session, None, None]:
+    """FastAPI dependency. Endpoints commit explicitly; anything uncommitted is rolled back."""
+    db = SessionLocal()
+    try:
+        yield db
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
-    async def init_db_async():
-        from models import Base as ModelsBase
 
-        async with engine.begin() as conn:
-            await conn.run_sync(ModelsBase.metadata.create_all)
+@contextmanager
+def get_db_context() -> Generator[Session, None, None]:
+    """Transactional scope for background work: commits on success, rolls back on error."""
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
-    def init_db():
-        from models import Base as ModelsBase
 
-        ModelsBase.metadata.create_all(bind=engine)
+def init_db() -> None:
+    """Create any missing tables. Schema *changes* go through Alembic migrations."""
+    import models  # noqa: F401  (registers mappers on Base.metadata)
 
-    def close_engine():
-        engine.dispose()
+    Base.metadata.create_all(bind=engine)
 
-    __all__ = [
-        "get_db",
-        "get_db_context",
-        "init_db",
-        "init_db_async",
-        "close_engine",
-        "Base",
-        "engine",
-        "is_postgres",
-    ]
 
-else:
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import Session, declarative_base, sessionmaker
+def close_engine() -> None:
+    engine.dispose()
 
-    if not DATABASE_URL:
-        sqlite_path = os.getenv("SQLITE_DB_PATH", "./orchestrix.db")
-        DATABASE_URL = f"sqlite:///{sqlite_path}"
 
-    engine = create_engine(
-        DATABASE_URL,
-        connect_args={"check_same_thread": False} if "sqlite" in DATABASE_URL else {},
-        pool_pre_ping=True,
-    )
-
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-    Base = declarative_base()
-
-    def get_db() -> Generator[Session, None, None]:
-        db = SessionLocal()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
-    @contextmanager
-    def get_db_context() -> Generator[Session, None, None]:
-        db = SessionLocal()
-        try:
-            yield db
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-        finally:
-            db.close()
-
-    def init_db_async():
-        init_db()
-
-    def init_db():
-        from models import Base as ModelsBase
-
-        ModelsBase.metadata.create_all(bind=engine)
-
-    def close_engine():
-        engine.dispose()
-
-    __all__ = [
-        "get_db",
-        "get_db_context",
-        "init_db",
-        "init_db_async",
-        "close_engine",
-        "Base",
-        "engine",
-        "is_postgres",
-    ]
+__all__ = [
+    "Base",
+    "DATABASE_URL",
+    "SessionLocal",
+    "close_engine",
+    "engine",
+    "get_db",
+    "get_db_context",
+    "init_db",
+    "is_postgres",
+]

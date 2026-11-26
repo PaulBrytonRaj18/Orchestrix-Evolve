@@ -10,10 +10,12 @@ export interface User {
 }
 
 export interface TokenResponse {
-  access_token: string;
-  refresh_token?: string;
+  access_token: string | null;
+  refresh_token?: string | null;
   token_type: string;
   user: User;
+  /** True when Supabase requires e-mail confirmation before issuing a session. */
+  email_confirmation_required?: boolean;
 }
 
 // ── Session Types ──
@@ -275,12 +277,12 @@ export interface RoadmapResponse {
 export interface OrchestrateResponse {
   papers: PaperWithDetails[];
   analysis: AnalysisData | null;
-  citations: Array<{ paper: PaperWithDetails; citation: CitationResponse }>;
+  citations: Array<{ paper_id: string; title: string; citation: CitationResponse }>;
   summaries: SummaryResponse[];
   trace: AgentTrace[];
   conflicts: ConflictResponse[];
-  conflict_summary: string;
-  roadmap: RoadmapResponse;
+  conflict_summary: string | null;
+  roadmap: RoadmapResponse | null;
 }
 
 // ── Agent Trace Types ──
@@ -288,6 +290,7 @@ export interface OrchestrateResponse {
 export interface AgentTrace {
   agent: string;
   status: 'running' | 'done' | 'error' | 'skipped';
+  duration_ms?: number;
   result?: string;
   reason?: string;
   error?: string;

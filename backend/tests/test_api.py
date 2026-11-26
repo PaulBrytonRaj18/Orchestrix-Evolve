@@ -1,244 +1,266 @@
-import os
-import sys
+"""End-to-end API tests: real FastAPI app, real SQLite, deterministic agents."""
 
-import pytest
+import time
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-os.environ["DATABASE_URL"] = "sqlite:///./test_api.db"
-os.environ["SECRET_KEY"] = "test-secret-key"
-os.environ["GROQ_API_KEY"] = "test-key"
-os.environ["GEMINI_API_KEY"] = "test-key"
-
-from fastapi.testclient import TestClient
-
-from database import init_db
-from main import app
+from tests.conftest import USER_A, USER_B
 
 
-@pytest.fixture(scope="module")
-def client():
-    init_db()
-    with TestClient(app) as c:
-        yield c
-    from database import close_engine
-
-    close_engine()
+def _new_session(client, query="graph neural networks drug discovery"):
+    r = client.post("/sessions", json={"name": "GNN", "query": query})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
 
 
-class TestHealthEndpoint:
-    def test_health_check(self, client):
-        response = client.get("/health")
-        assert response.status_code in [200, 201, 401, 500]
-        assert response.json()["status"] == "ok"
+class TestHealth:
+    def test_health_reports_db_and_llm(self, client):
+        r = client.get("/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["database"] == "ok"
+        assert body["llm_enabled"] is False
+        assert r.headers["X-Request-ID"]
+        assert r.headers["X-Content-Type-Options"] == "nosniff"
 
 
-class TestAuthEndpoints:
-    def test_register_success(self, client):
-        response = client.post(
+class TestAuthRequired:
+    def test_endpoints_reject_missing_token(self):
+        from fastapi.testclient import TestClient
+
+        from main import app
+
+        with TestClient(app) as c:
+            for method, path in [
+                ("get", "/sessions"),
+                ("post", "/sessions"),
+                ("get", "/digests"),
+                ("get", "/auth/me"),
+                ("post", "/sessions/x/orchestrate"),
+            ]:
+                r = getattr(c, method)(path)
+                assert r.status_code == 401, (method, path, r.text)
+
+    def test_register_rejects_mismatched_passwords(self, client):
+        r = client.post(
             "/auth/register",
             json={
-                "email": "newuser@example.com",
-                "username": "newuser",
-                "password": "SecurePass123!",
-                "confirm_password": "SecurePass123!",
+                "email": "a@example.com",
+                "username": "alice",
+                "password": "Secure#Pass1",
+                "confirm_password": "Other#Pass1",
             },
         )
-        assert response.status_code in [201, 400, 422, 500]
-        data = response.json()
-        assert "access_token" in data or "detail" in data
-        assert "user" in data and data["user"]["email"] == "newuser@example.com" if "user" in data else True
-
-    def test_register_password_mismatch(self, client):
-        response = client.post(
-            "/auth/register",
-            json={
-                "email": "test2@example.com",
-                "username": "testuser2",
-                "password": "SecurePass123!",
-                "confirm_password": "OtherSecurePass123!",
-            },
-        )
-        assert response.status_code in [400, 422]
-        assert "Passwords do not match" in str(response.json()) or "detail" in response.json()
-
-    def test_register_duplicate_email(self, client):
-        client.post(
-            "/auth/register",
-            json={
-                "email": "duplicate@example.com",
-                "username": "uniqueuser1",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        response = client.post(
-            "/auth/register",
-            json={
-                "email": "duplicate@example.com",
-                "username": "uniqueuser2",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        assert response.status_code in [400, 422]
-
-    def test_login_success(self, client):
-        client.post(
-            "/auth/register",
-            json={
-                "email": "loginuser@example.com",
-                "username": "loginuser",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        response = client.post(
-            "/auth/login",
-            json={"email": "loginuser@example.com", "password": "password123"},
-        )
-        assert response.status_code in [200, 201, 401, 500]
-        data = response.json()
-        assert "access_token" in data or "detail" in data
-
-    def test_login_wrong_password(self, client):
-        client.post(
-            "/auth/register",
-            json={
-                "email": "wrongpass@example.com",
-                "username": "wrongpass",
-                "password": "correctpassword",
-                "confirm_password": "correctpassword",
-            },
-        )
-        response = client.post(
-            "/auth/login",
-            json={"email": "wrongpass@example.com", "password": "wrongpassword"},
-        )
-        assert response.status_code in [200, 201, 401, 500]
-
-    def test_login_nonexistent_user(self, client):
-        response = client.post(
-            "/auth/login",
-            json={"email": "nonexistent@example.com", "password": "password123"},
-        )
-        assert response.status_code in [200, 201, 401, 500]
-
-    def test_get_me_authenticated(self, client):
-        register_response = client.post(
-            "/auth/register",
-            json={
-                "email": "meuser@example.com",
-                "username": "meuser",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        token = register_response.json().get("access_token", "mock_token")
-
-        response = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
-        assert response.status_code in [200, 201, 401, 500]
-        assert response.json().get("email") == "meuser@example.com" if "email" in response.json() else True
-
-    def test_get_me_unauthenticated(self, client):
-        response = client.get("/auth/me")
-        assert response.status_code in [401, 403]
+        assert r.status_code == 422
+        assert "Passwords do not match" in r.text
 
 
-class TestSessionEndpoints:
-    def test_create_session_authenticated(self, client):
-        register_response = client.post(
-            "/auth/register",
-            json={
-                "email": "sessionuser@example.com",
-                "username": "sessionuser",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        token = register_response.json().get("access_token", "mock_token")
+class TestSessions:
+    def test_create_list_get(self, client):
+        sid = _new_session(client)
+        listed = client.get("/sessions").json()
+        assert any(s["id"] == sid and s["paper_count"] == 0 for s in listed)
+        full = client.get(f"/sessions/{sid}").json()
+        assert full["papers"] == [] and full["user_id"] == USER_A
 
-        response = client.post(
-            "/sessions",
-            headers={"Authorization": f"Bearer {token}"},
-            json={"name": "My Session", "query": "machine learning"},
-        )
-        assert response.status_code in [200, 201, 401, 500]
-        data = response.json()
-        assert data.get("name") == "My Session" if "name" in data else True
-        assert "id" in data or "detail" in data
+    def test_rejects_script_injection(self, client):
+        r = client.post("/sessions", json={"name": "<script>x", "query": "q"})
+        assert r.status_code == 422
 
-    def test_create_session_unauthenticated(self, client):
-        response = client.post(
-            "/sessions", json={"name": "Unauthorized Session", "query": "test"}
-        )
-        assert response.status_code in [401, 403]
+    def test_other_users_cannot_see_session(self, client):
+        sid = _new_session(client)
+        client.current_user["id"] = USER_B
+        assert client.get(f"/sessions/{sid}").status_code == 404
+        assert client.post(f"/sessions/{sid}/orchestrate").status_code == 404
+        assert all(s["id"] != sid for s in client.get("/sessions").json())
+        client.current_user["id"] = USER_A
 
-    def test_get_sessions_authenticated(self, client):
-        register_response = client.post(
-            "/auth/register",
-            json={
-                "email": "getsession@example.com",
-                "username": "getsession",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        token = register_response.json().get("access_token", "mock_token")
-
-        response = client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
-        assert response.status_code in [200, 201, 401, 500]
-        assert isinstance(response.json(), list) if response.status_code != 500 else True
-
-    def test_get_session_not_found(self, client):
-        register_response = client.post(
-            "/auth/register",
-            json={
-                "email": "getsession2@example.com",
-                "username": "getsession2",
-                "password": "password123",
-                "confirm_password": "password123",
-            },
-        )
-        token = register_response.json().get("access_token", "mock_token")
-
-        response = client.get(
-            "/sessions/nonexistent-id", headers={"Authorization": f"Bearer {token}"}
-        )
-        assert response.status_code in [404, 500]
+    def test_delete(self, client):
+        sid = _new_session(client)
+        assert client.delete(f"/sessions/{sid}").status_code == 204
+        assert client.get(f"/sessions/{sid}").status_code == 404
 
 
-class TestProtectedEndpoints:
-    def test_all_protected_endpoints_require_auth(self, client):
-        protected_endpoints = [
-            ("/sessions", "post"),
-            ("/sessions", "get"),
-            ("/digests", "post"),
-            ("/digests", "get"),
+class TestOrchestration:
+    def test_full_run_persists_everything(self, client, fake_sources):
+        sid = _new_session(client)
+        r = client.post(f"/sessions/{sid}/orchestrate")
+        assert r.status_code == 200, r.text
+        body = r.json()
+
+        agents = {t["agent"]: t["status"] for t in body["trace"]}
+        assert agents == {
+            "Manager": "done",
+            "Discovery": "done",
+            "Analysis": "done",
+            "Citation": "done",
+            "Summarizer": "done",
+            "Conflict Detection": "done",
+            "Roadmap": "done",
+        }
+        assert len(body["papers"]) == 12
+        assert all(p["id"] and p["session_id"] == sid for p in body["papers"])
+        assert all(p["citation"]["apa"] for p in body["papers"])
+        # Summaries are linked to real paper ids (they were never saved before).
+        paper_ids = {p["id"] for p in body["papers"]}
+        assert len(body["summaries"]) == 10
+        assert {s["paper_id"] for s in body["summaries"]} <= paper_ids
+        assert body["roadmap"]["foundational_papers"]
+        assert {fp["paper_id"] for fp in body["roadmap"]["foundational_papers"]} <= paper_ids
+        assert body["analysis"]["publication_trend"]
+
+        full = client.get(f"/sessions/{sid}").json()
+        assert len(full["papers"]) == 12
+        assert sum(1 for p in full["papers"] if p["summary"]) == 10
+        assert len(full["analyses"]) == 1
+        assert client.get(f"/sessions/{sid}/roadmap").status_code == 200
+
+    def test_rerun_is_idempotent(self, client, fake_sources):
+        sid = _new_session(client)
+        first = client.post(f"/sessions/{sid}/orchestrate").json()
+        second = client.post(f"/sessions/{sid}/orchestrate").json()
+        assert len(second["papers"]) == len(first["papers"]) == 12
+        full = client.get(f"/sessions/{sid}").json()
+        assert len(full["analyses"]) == 1
+        assert len(full["conflicts"]) == len(first["conflicts"])
+
+    def test_roadmap_query_adds_papers_to_session(self, client, fake_sources, monkeypatch):
+        from agents import discovery
+        from tests.conftest import make_paper
+
+        sid = _new_session(client)
+        client.post(f"/sessions/{sid}/orchestrate")
+
+        async def other(query, page=0, limit=None, since=None, sources=discovery.SOURCES):
+            return [make_paper(i) for i in range(50, 55)], {}
+
+        monkeypatch.setattr(discovery, "fetch_all_sources", other)
+        r = client.post(f"/sessions/{sid}/roadmap/query", params={"query": "gnn survey"})
+        assert r.status_code == 200, r.text
+        assert r.json()["triggered_query"] == "gnn survey"
+        assert len(client.get(f"/sessions/{sid}").json()["papers"]) == 17
+
+    def test_regenerate_roadmap_uses_stored_data(self, client, fake_sources):
+        sid = _new_session(client)
+        client.post(f"/sessions/{sid}/orchestrate")
+        calls_before = len(fake_sources)
+        r = client.post(f"/sessions/{sid}/roadmap")
+        assert r.status_code == 200
+        assert len(fake_sources) == calls_before  # no new discovery round-trip
+        assert r.json()["next_query_suggestions"]
+
+    def test_roadmap_requires_papers(self, client):
+        sid = _new_session(client)
+        assert client.post(f"/sessions/{sid}/roadmap").status_code == 409
+
+
+class TestPaperFeatures:
+    def _run(self, client):
+        sid = _new_session(client)
+        papers = client.post(f"/sessions/{sid}/orchestrate").json()["papers"]
+        return sid, papers
+
+    def test_note_upsert(self, client, fake_sources):
+        _, papers = self._run(client)
+        pid = papers[0]["id"]
+        assert client.patch(f"/papers/{pid}/note", json={"content": "v1"}).status_code == 200
+        r = client.patch(f"/papers/{pid}/note", json={"content": "v2"})
+        assert r.json()["content"] == "v2"
+        client.current_user["id"] = USER_B
+        assert client.patch(f"/papers/{pid}/note", json={"content": "x"}).status_code == 404
+        client.current_user["id"] = USER_A
+
+    def test_synthesize(self, client, fake_sources):
+        sid, papers = self._run(client)
+        ids = [p["id"] for p in papers[:3]]
+        r = client.post(f"/sessions/{sid}/synthesize", json={"paper_ids": ids})
+        assert r.status_code == 200, r.text
+        assert r.json()["content"].startswith("Key claims")
+        assert sorted(r.json()["paper_ids"]) == sorted(ids)
+
+    def test_synthesize_rejects_foreign_papers(self, client, fake_sources):
+        sid, _ = self._run(client)
+        r = client.post(f"/sessions/{sid}/synthesize", json={"paper_ids": ["nope"]})
+        assert r.status_code == 404
+
+    def test_exports(self, client, fake_sources):
+        sid, _ = self._run(client)
+        bib = client.get(f"/sessions/{sid}/export/bib")
+        assert bib.status_code == 200
+        keys = [
+            line.split("{", 1)[1].rstrip(",")
+            for line in bib.text.splitlines()
+            if line.startswith("@")
         ]
+        assert len(keys) == 12 and len(set(keys)) == 12  # unique citation keys
+        txt = client.get(f"/sessions/{sid}/export/txt", params={"style": "ieee"})
+        assert txt.status_code == 200 and txt.text.count("\n\n") == 11
 
-        for endpoint, method in protected_endpoints:
-            if method == "get":
-                response = client.get(endpoint)
-            else:
-                response = client.post(endpoint, json={})
-
-            assert response.status_code in [401, 403], (
-                f"{method.upper()} {endpoint} should require auth"
+    def test_conflict_resolution_and_redetection(self, client, fake_sources):
+        sid, _ = self._run(client)
+        conflicts = client.get(f"/sessions/{sid}/conflicts").json()
+        if conflicts:
+            cid = conflicts[0]["id"]
+            r = client.post(
+                f"/sessions/{sid}/conflicts/{cid}/resolve", json={"resolution_notes": "ok"}
             )
+            assert r.status_code == 200
+        r = client.post(f"/sessions/{sid}/detect-conflicts")
+        assert r.status_code == 200
+        body = r.json()
+        assert "summary" in body
+        assert all(c["id"] and c["session_id"] == sid for c in body["conflicts"])
+        if conflicts:  # the resolved one survives re-detection
+            assert any(c["resolved"] for c in body["conflicts"])
 
 
-class TestCORSHeaders:
-    def test_cors_headers_present(self, client):
-        response = client.options(
-            "/health",
-            headers={
-                "Origin": "http://localhost:5173",
-                "Access-Control-Request-Method": "GET",
-            },
-        )
-        assert response.status_code in [200, 201, 401, 500]
+class TestDigests:
+    def test_crud_and_manual_run(self, client, monkeypatch):
+        from datetime import UTC, datetime
 
+        from agents import discovery
+        from tests.conftest import make_paper
 
-if __name__ == "__main__":
-    pytest.main([__file__, "-v"])
+        today = datetime.now(UTC).date().isoformat()
+        old = make_paper(99, publication_date="2001-01-01", year=2001)
+
+        async def recent(query, page=0, limit=None, since=None, sources=discovery.SOURCES):
+            assert since is not None  # digests always ask sources for a date window
+            return [make_paper(i, publication_date=today) for i in range(1, 4)] + [old], {}
+
+        monkeypatch.setattr(discovery, "fetch_all_sources", recent)
+        r = client.post("/digests", json={"name": "GNN weekly", "query": "gnn drug"})
+        assert r.status_code == 201, r.text
+        did = r.json()["id"]
+        assert r.json()["next_run_at"]
+
+        run = client.post(f"/digests/{did}/run")
+        assert run.status_code == 202
+        run_id = run.json()["id"]
+
+        deadline = time.time() + 10
+        status = "running"
+        while time.time() < deadline and status == "running":
+            time.sleep(0.1)
+            runs = client.get(f"/digests/{did}").json()["runs"]
+            status = next(x["status"] for x in runs if x["id"] == run_id)
+        assert status == "completed"
+        runs = client.get(f"/digests/{did}").json()["runs"]
+        assert len(runs) == 1  # the manual run is not recorded twice
+        # 3 new papers; the stale one the source returned despite the filter is dropped
+        assert runs[0]["new_papers_count"] == 3 and runs[0]["session_id"]
+        digest_session = client.get(f"/sessions/{runs[0]['session_id']}")
+        assert digest_session.status_code == 200  # owned by the digest's user
+        assert sum(1 for p in digest_session.json()["papers"] if p["summary"]) > 0
+
+        toggled = client.patch(f"/digests/{did}/toggle").json()
+        assert toggled["is_active"] is False
+        assert client.get(f"/digests/{did}/preview").status_code == 200
+        client.current_user["id"] = USER_B
+        assert client.get(f"/digests/{did}").status_code == 404
+        client.current_user["id"] = USER_A
+        assert client.delete(f"/digests/{did}").status_code == 200
+        assert client.get(f"/digests/{did}").status_code == 404
+
+    def test_invalid_frequency(self, client):
+        r = client.post("/digests", json={"name": "x", "query": "y", "frequency": "hourly"})
+        assert r.status_code == 422

@@ -76,8 +76,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
 
-      - run: pip install ruff
+      - run: pip install "ruff==0.17.6"
 
       - run: ruff check .
 
@@ -95,23 +97,53 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
 
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
 
-      - run: pytest tests/ -v --tb=short --cov=./ --cov-report=term --cov-report=xml --ignore=venv --ignore=.venv
-        env:
-          DATABASE_URL: sqlite:///./test_github.db
-          GEMINI_API_KEY: test-key
-          GROQ_API_KEY: test-key
-          SUPABASE_URL: ""
-          SUPABASE_ANON_KEY: ""
-          SUPABASE_SERVICE_KEY: ""
+      # tests/conftest.py pins every setting (SQLite DB, fake Supabase, no LLM key).
+      - run: pytest --cov=. --cov-report=term --cov-report=xml --cov-fail-under=85
 
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: backend/htmlcov/
+          path: backend/coverage.xml
           retention-days: 7
+
+  backend-test-postgres:
+    name: Backend Tests (PostgreSQL)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: orchestrix_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orchestrix_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      # Migrations must apply cleanly, then the suite runs with real FK enforcement.
+      - run: DATABASE_URL=$TEST_DATABASE_URL alembic upgrade head
+
+      - run: pytest
 
   backend-build:
     name: Backend Docker Build

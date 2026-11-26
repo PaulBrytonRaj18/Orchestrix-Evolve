@@ -10,6 +10,7 @@ import type {
   ScheduledDigestWithRuns,
   HealthResponse,
   RoadmapResponse,
+  SynthesisResponse,
   User,
 } from './types/api';
 import { supabase } from './lib/supabase';
@@ -173,10 +174,10 @@ export const api = {
       body: JSON.stringify({ content }),
     }),
 
-  synthesize: (sessionId: string, paperIds: string[]): Promise<{ synthesis: string }> =>
-    fetchJSON<{ synthesis: string }>(`/sessions/${sessionId}/synthesize`, {
+  synthesize: (sessionId: string, paperIds: string[]): Promise<SynthesisResponse> =>
+    fetchJSON<SynthesisResponse>(`/sessions/${sessionId}/synthesize`, {
       method: 'POST',
-      body: JSON.stringify(paperIds),
+      body: JSON.stringify({ paper_ids: paperIds }),
     }),
 
   exportBib: async (sessionId: string): Promise<void> => {

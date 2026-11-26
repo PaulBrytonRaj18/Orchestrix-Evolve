@@ -1,253 +1,265 @@
-import asyncio
-import json
-import logging
-import os
-from datetime import UTC, datetime
+"""Multi-agent orchestration.
 
-from groq import AsyncGroq
-from dotenv import load_dotenv
+The agents form a small dependency graph::
+
+    discovery ──┬── analysis ────┐
+                ├── citation      ├── conflict_detector ── roadmap
+                └── summarizer ──┘
+
+Independent agents in the same stage run concurrently; every agent is isolated, so
+one failing (e.g. the LLM being down) is recorded in the trace and the rest of the
+graph still completes. A plan can come from a static policy (default: the full
+graph, deterministic and free) or from the LLM Manager agent, whose output is
+validated against the known agents and dependency-completed before it runs.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+import uuid
+import weakref
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from agents import analysis, citation, conflict_detector, discovery, roadmap, summarizer
-
-load_dotenv()
+from config import get_settings
+from llm import get_llm
 
 logger = logging.getLogger(__name__)
 
-_session_locks: dict[str, asyncio.Lock] = {}
-_locks_lock = asyncio.Lock()
+AGENT_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "discovery": (),
+    "analysis": ("discovery",),
+    "citation": ("discovery",),
+    "summarizer": ("discovery",),
+    "conflict_detector": ("analysis", "summarizer"),
+    "roadmap": ("discovery",),
+}
+FULL_WORKFLOW = list(AGENT_DEPENDENCIES)
+MIN_PAPERS_FOR_ANALYSIS = 3
+
+_session_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
-def utcnow():
+def utcnow() -> str:
     return datetime.now(UTC).isoformat()
 
 
-async def _get_session_lock(session_id: str) -> asyncio.Lock:
-    async with _locks_lock:
-        if session_id not in _session_locks:
-            _session_locks[session_id] = asyncio.Lock()
-        return _session_locks[session_id]
+def _session_lock(session_id: str) -> asyncio.Lock:
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _session_locks[session_id] = lock
+    return lock
 
 
-async def manager_agent_decide_workflow(query: str, trace: list) -> list:
-    """
-    A Manager Agent that decides which sub-agents to invoke based on the query.
-    For this codebase, we have specific capabilities. We prompt the LLM to give us a plan.
-    """
-    trace.append({"agent": "Manager", "status": "running", "timestamp": utcnow()})
+def resolve_workflow(requested: list[str]) -> list[str]:
+    """Keep known agents, add missing dependencies, return in topological order."""
+    wanted: set[str] = set()
 
-    # We define the available tools/agents
-    system_prompt = """You are a Research Manager Agent in a Multi-Agent System.
-Your job is to receive a user's research query and decide which agents need to be invoked to fulfill the request.
+    def add(agent: str) -> None:
+        if agent in AGENT_DEPENDENCIES and agent not in wanted:
+            wanted.add(agent)
+            for dep in AGENT_DEPENDENCIES[agent]:
+                add(dep)
 
-Available Agents:
-- discovery: Finds academic papers related to the query.
-- analysis: Analyzes trends, keywords, citations, and authors in the papers. (Requires discovery)
-- summarizer: Generates summaries for the papers. (Requires discovery)
-- citation: Generates formatted citations for the papers. (Requires discovery)
-- conflict_detector: Detects contradictions between analysis and summaries. (Requires analysis and summarizer)
-- roadmap: Generates a research roadmap. (Requires discovery, optionally analysis, summarizer, conflict_detector)
+    for agent in requested:
+        add(str(agent).strip().lower())
+    return [a for a in FULL_WORKFLOW if a in wanted] or FULL_WORKFLOW
 
-For a comprehensive research workflow, you should typically invoke all of them in this order:
-["discovery", "analysis", "citation", "summarizer", "conflict_detector", "roadmap"]
 
-Return ONLY a JSON list of strings representing the agents to invoke, in the correct execution order.
-Do not wrap it in markdown or add any other text.
-"""
+class Trace:
+    """Ordered agent log, shaped for the UI's AgentTraceLog component."""
 
-    user_prompt = f"User query: '{query}'\nDetermine the workflow."
+    def __init__(self) -> None:
+        self.entries: list[dict[str, Any]] = []
 
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        logger.warning("No GROQ_API_KEY found, falling back to default workflow.")
-        trace[-1] = {
-            **trace[-1],
-            "status": "done",
-            "result": "Default workflow selected (No API Key)"
-        }
-        return ["discovery", "analysis", "citation", "summarizer", "conflict_detector", "roadmap"]
+    async def step(
+        self, agent: str, fn: Callable[[], Awaitable[Any]], describe: Callable[[Any], str]
+    ) -> Any:
+        entry: dict[str, Any] = {"agent": agent, "status": "running", "timestamp": utcnow()}
+        self.entries.append(entry)
+        started = time.perf_counter()
+        try:
+            result = await fn()
+        except Exception as exc:
+            logger.exception("Agent %s failed", agent)
+            entry.update(status="error", error=f"{type(exc).__name__}: {exc}")
+            result = None
+        else:
+            entry.update(status="done", result=describe(result))
+        entry["duration_ms"] = int((time.perf_counter() - started) * 1000)
+        return result
 
-    try:
-        client = AsyncGroq(api_key=api_key)
-        res = await asyncio.wait_for(
-            client.chat.completions.create(
-                model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,
-                max_tokens=200,
-            ),
-            timeout=10.0,
+    def skip(self, agent: str, reason: str) -> None:
+        self.entries.append(
+            {"agent": agent, "status": "skipped", "reason": reason, "timestamp": utcnow()}
         )
 
-        content = res.choices[0].message.content.strip()
-        if content.startswith("```"):
-            content = content.split("```")[1].strip()
-            if content.startswith("json"):
-                content = content[4:].strip()
 
-        workflow = json.loads(content)
-
-        # Ensure discovery is first if anything else is requested
-        if workflow and "discovery" not in workflow:
-            workflow.insert(0, "discovery")
-
-        trace[-1] = {
-            **trace[-1],
-            "status": "done",
-            "result": f"Decided workflow: {', '.join(workflow)}"
-        }
-        return workflow
-    except Exception as e:
-        logger.error(f"Manager Agent error: {e}")
-        trace[-1] = {
-            **trace[-1],
-            "status": "done",
-            "result": f"Default workflow selected (Error: {str(e)})"
-        }
-        return ["discovery", "analysis", "citation", "summarizer", "conflict_detector", "roadmap"]
-
-
-async def orchestrate(query: str, session_id: str, page: int = 0) -> dict:
-    """
-    Central orchestration layer using a True Multi-Agent architecture.
-    A Manager Agent decides the workflow, and then delegates to the respective Sub-Agents.
-    Uses per-session lock to prevent concurrent orchestration of same session.
-    """
-    lock = await _get_session_lock(session_id)
-
-    if lock.locked():
-        logger.warning(f"Session {session_id} already being orchestrated, waiting...")
-
-    async with lock:
-        trace = []
-
-        # True MAS: LLM Manager decides the plan
-        workflow = await manager_agent_decide_workflow(query, trace)
-
-        papers = []
-        papers_with_citations = []
-        analysis_result = None
-        conflicts = []
-        conflict_result = None
-        summaries_list = []
-        roadmap_result = None
-
-        if "discovery" in workflow:
-            trace.append({"agent": "Discovery", "status": "running", "timestamp": utcnow()})
-            papers = await discovery.run(query, page)
-            trace[-1] = {**trace[-1], "status": "done", "result": f"{len(papers)} papers found"}
-            papers_with_citations = papers  # Fallback if citation not run
-
-        if "analysis" in workflow:
-            if len(papers) > 5:
-                trace.append({"agent": "Analysis", "status": "running", "timestamp": utcnow()})
-                analysis_result = await analysis.run(papers)
-                trace[-1] = {**trace[-1], "status": "done", "result": "Analysis complete"}
-            else:
-                trace.append({
-                    "agent": "Analysis",
-                    "status": "skipped",
-                    "reason": "fewer than 5 papers returned",
-                    "timestamp": utcnow(),
-                })
-
-        if "citation" in workflow or "summarizer" in workflow:
-            trace.append({"agent": "Citations & Summaries", "status": "running", "timestamp": utcnow()})
-
-            # We can run these concurrently in a true MAS
-            citation_task = citation.run(papers) if "citation" in workflow else papers
-
-            if "summarizer" in workflow:
-                summaries_list = await summarizer.summarize_all_papers(papers)
-
-            if "citation" in workflow:
-                # citation.run is synchronous
-                papers_with_citations = citation_task
-
-            trace[-1] = {
-                **trace[-1],
+async def plan_workflow(query: str, trace: Trace) -> list[str]:
+    settings = get_settings()
+    llm = get_llm()
+    if settings.orchestrator_planner != "llm" or not llm.enabled:
+        trace.entries.append(
+            {
+                "agent": "Manager",
                 "status": "done",
-                "result": f"{len(papers_with_citations) if 'citation' in workflow else 0} citations, {len(summaries_list)} summaries generated",
+                "result": "Static plan: " + " → ".join(FULL_WORKFLOW),
+                "timestamp": utcnow(),
+                "duration_ms": 0,
             }
+        )
+        return FULL_WORKFLOW
 
-        if "conflict_detector" in workflow:
-            if analysis_result and summaries_list and len(summaries_list) > 0:
-                trace.append({"agent": "Conflict Detection", "status": "running", "timestamp": utcnow()})
+    async def ask() -> list[str]:
+        data = await llm.chat_json(
+            "You are the Manager agent of a research multi-agent system. Choose which agents "
+            "to run for the user's query. Agents: discovery (find papers), analysis (trends, "
+            "keywords, authors), citation (formatted references), summarizer (per-paper LLM "
+            "summaries), conflict_detector (contradictions between analysis and summaries), "
+            "roadmap (foundational papers, gaps, next queries). Default to all of them unless "
+            'the query clearly needs less. Respond as JSON: {"agents": [..]}',
+            f"User query: {query!r}",
+            max_tokens=150,
+            temperature=0.0,
+        )
+        return resolve_workflow((data or {}).get("agents") or FULL_WORKFLOW)
 
-                conflict_result = await conflict_detector.detect_conflicts(
-                    papers, analysis_result, summaries_list
-                )
+    workflow = await trace.step("Manager", ask, lambda w: "Plan: " + " → ".join(w))
+    return workflow or FULL_WORKFLOW
 
-                conflicts = conflict_result.get("conflicts", [])
-                if conflicts:
-                    conflict_result.get("summary", f"Detected {len(conflicts)} conflicts")
-                    trace[-1] = {
-                        **trace[-1],
-                        "status": "done",
-                        "result": f"{len(conflicts)} conflicts detected - review in conflicts panel",
-                    }
-                else:
-                    trace[-1] = {**trace[-1], "status": "done", "result": "No conflicts detected"}
-            else:
-                trace.append({
-                    "agent": "Conflict Detection",
-                    "status": "skipped",
-                    "reason": "Insufficient data for conflict detection",
-                    "timestamp": utcnow(),
-                })
 
-        if "roadmap" in workflow:
-            if papers and len(papers) > 0:
-                trace.append({"agent": "Roadmap", "status": "running", "timestamp": utcnow()})
+def _empty_analysis() -> dict[str, list]:
+    return {
+        "publication_trend": [],
+        "top_authors": [],
+        "keyword_frequency": [],
+        "citation_distribution": [],
+        "emerging_topics": [],
+    }
 
-                analysis_data = analysis_result if analysis_result else {
-                    "publication_trend": [],
-                    "top_authors": [],
-                    "keyword_frequency": [],
-                    "citation_distribution": [],
-                    "emerging_topics": [],
-                }
 
-                roadmap_result = await roadmap.run(
-                    papers=papers,
-                    analysis_trend_data=analysis_data,
-                    summaries=summaries_list if summaries_list else [],
-                    notes=[],
-                    conflicts=conflicts if conflicts else [],
-                    session_id=session_id,
-                )
+async def orchestrate(query: str, session_id: str, page: int = 0) -> dict[str, Any]:
+    """Run the agent graph for ``query``. Pure computation: persistence is the caller's job.
 
-                trace[-1] = {
-                    **trace[-1],
-                    "status": "done",
-                    "result": (
-                        f"Roadmap generated: {len(roadmap_result['foundational_papers'])} papers, "
-                        f"{len(roadmap_result['gap_areas'])} gaps, "
-                        f"{len(roadmap_result['next_query_suggestions'])} queries"
+    Every returned paper has a provisional ``id`` that summaries and the roadmap refer
+    to; the persistence layer maps it onto the stored row id.
+    """
+    settings = get_settings()
+    async with _session_lock(session_id):
+        trace = Trace()
+        workflow = await plan_workflow(query, trace)
+
+        papers: list[dict[str, Any]] = (
+            await trace.step(
+                "Discovery",
+                lambda: discovery.run(query, page),
+                lambda r: f"{len(r)} papers found",
+            )
+            or []
+        )
+        for paper in papers:
+            paper["id"] = str(uuid.uuid4())
+
+        # ── Stage 2: independent agents, concurrently ───────────────────────
+        async def run_analysis() -> dict | None:
+            if "analysis" not in workflow:
+                return None
+            if len(papers) < MIN_PAPERS_FOR_ANALYSIS:
+                trace.skip("Analysis", f"needs at least {MIN_PAPERS_FOR_ANALYSIS} papers")
+                return None
+            return await trace.step(
+                "Analysis", lambda: analysis.run(papers), lambda _: "Trends, authors & keywords"
+            )
+
+        async def run_citations() -> list[dict] | None:
+            if "citation" not in workflow or not papers:
+                return None
+
+            async def gen() -> list[dict]:
+                return citation.run(papers)
+
+            return await trace.step("Citation", gen, lambda r: f"{len(r)} citations generated")
+
+        async def run_summaries() -> list[dict]:
+            if "summarizer" not in workflow or not papers:
+                return []
+            subset = papers[: settings.summarize_top_n]
+            return (
+                await trace.step(
+                    "Summarizer",
+                    lambda: summarizer.summarize_all_papers(subset),
+                    lambda r: (
+                        f"{len(r)} summaries ("
+                        + (
+                            "LLM"
+                            if any(s.get("generated_by") == "llm" for s in r)
+                            else "extractive"
+                        )
+                        + ")"
                     ),
-                }
+                )
+                or []
+            )
+
+        analysis_result, cited, summaries = await asyncio.gather(
+            run_analysis(), run_citations(), run_summaries()
+        )
+        if cited:
+            citation_by_id = {p["id"]: p["citation"] for p in cited}
+            for paper in papers:
+                paper["citation"] = citation_by_id.get(paper["id"])
+
+        # ── Stage 3: conflict detection ─────────────────────────────────────
+        conflict_result: dict[str, Any] | None = None
+        if "conflict_detector" in workflow:
+            if analysis_result and summaries:
+                conflict_result = await trace.step(
+                    "Conflict Detection",
+                    lambda: conflict_detector.detect_conflicts(papers, analysis_result, summaries),
+                    lambda r: (
+                        f"{len(r['conflicts'])} conflicts detected"
+                        if r["conflicts"]
+                        else "No conflicts detected"
+                    ),
+                )
             else:
-                trace.append({
-                    "agent": "Roadmap",
-                    "status": "skipped",
-                    "reason": "No papers available for roadmap generation",
-                    "timestamp": utcnow(),
-                })
+                trace.skip("Conflict Detection", "requires both analysis and summaries")
+        conflicts = (conflict_result or {}).get("conflicts", [])
+
+        # ── Stage 4: roadmap ────────────────────────────────────────────────
+        roadmap_result = None
+        if "roadmap" in workflow:
+            if papers:
+                roadmap_result = await trace.step(
+                    "Roadmap",
+                    lambda: roadmap.run(
+                        papers=papers,
+                        analysis_trend_data=analysis_result or _empty_analysis(),
+                        summaries=summaries,
+                        notes=[],
+                        conflicts=conflicts,
+                        session_id=session_id,
+                        query=query,
+                    ),
+                    lambda r: (
+                        f"{len(r['foundational_papers'])} key papers, "
+                        f"{len(r['gap_areas'])} gaps, {len(r['next_query_suggestions'])} next queries"
+                    ),
+                )
+            else:
+                trace.skip("Roadmap", "no papers available")
 
     return {
-        "papers": papers_with_citations,
+        "papers": papers,
         "analysis": analysis_result,
-        "citations": [
-            {"paper": p, "citation": p.get("citation", {})}
-            for p in papers_with_citations
-        ],
-        "summaries": summaries_list,
-        "trace": trace,
+        "summaries": summaries,
+        "trace": trace.entries,
         "conflicts": conflicts,
-        "conflict_summary": conflict_result.get("summary", "No conflicts detected")
-        if conflict_result
-        else "No conflicts detected",
+        "conflict_summary": (conflict_result or {}).get("summary", "No conflicts detected"),
         "roadmap": roadmap_result,
     }

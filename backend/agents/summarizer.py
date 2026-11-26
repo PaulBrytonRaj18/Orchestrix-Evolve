@@ -1,332 +1,166 @@
+"""Summarization Agent.
+
+Per-paper summaries are produced by the LLM in JSON mode and normalised to the
+columns the ``summaries`` table stores. Each result carries the ``paper_id`` of its
+input so it can be persisted and joined (previously summaries had no id and were
+silently dropped). Without an LLM key an extractive fallback is used, so the UI
+always has something sensible to show.
+"""
+
+from __future__ import annotations
+
 import asyncio
-import json
 import logging
-import os
-import time
+import re
+from typing import Any
 
-from dotenv import load_dotenv
-from groq import AsyncGroq
-
-load_dotenv()
+from llm import get_llm
 
 logger = logging.getLogger(__name__)
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+_ABSTRACT_CHARS = 1800
 
-# ── Rate limiting configuration ──
-# Free tier: ~10 req/min, Pro: ~60 req/min
-# Use environment variable or fallback to conservative default
-MAX_CONCURRENT_REQUESTS = int(os.getenv("MAX_CONCURRENT_REQUESTS", "3"))
-REQUEST_TIMEOUT = float(os.getenv("GROQ_TIMEOUT", "30.0"))
-
-# Rate limit tracking
-_rate_limit_state = {
-    "last_request_time": 0.0,
-    "request_count": 0,
-    "window_start": 0.0,
-    "requests_per_minute": int(os.getenv("GROQ_RATE_LIMIT_RPM", "10")),
-}
-
-_semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
-# ─────────────────────────── UTILS ───────────────────────────
-
-
-def _truncate(text: str | None, limit: int = 300) -> str:
-    return (text or "")[:limit]
-
-
-def _clean(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("```")[1]
-    return text.strip()
-
-
-def _safe_json(text: str) -> dict | None:
-    try:
-        return json.loads(text)
-    except Exception:
-        start, end = text.find("{"), text.rfind("}") + 1
-        if start != -1 and end > start:
-            try:
-                return json.loads(text[start:end])
-            except Exception:
-                pass
-        return None
-
-
-def _confidence(paper: dict) -> float:
-    score = 0.0
-    if paper.get("title"):
-        score += 0.5
-    if paper.get("abstract"):
-        score += 1.0
-    return round(score / 2, 2)
-
-
-def _deduplicate(docs: list[dict]) -> list[dict]:
-    seen, result = set(), []
-    for d in docs:
-        key = d.get("title", "").lower().strip()
-        if key not in seen:
-            seen.add(key)
-            result.append(d)
-    return result
-
-
-def _detect_conflicts(docs: list[dict]) -> list[str]:
-    years = {d.get("year") for d in docs if d.get("year")}
-    return ["Different publication years detected"] if len(years) > 1 else []
-
-
-_FALLBACK_SINGLE = {
-    "derived_content": {"abstract_compression": "", "key_points": []},
-    "inferred_content": {
-        "explanation_approach": "",
-        "strengths": "",
-        "limitations": "",
-        "novelty_level": "",
-    },
-    "key_takeaway": "Could not generate summary.",
-    "confidence_score": 0.3,
-}
-
-_FALLBACK_MULTI = {
-    "derived_content": {"common_themes": [], "key_combined_insights": []},
-    "inferred_content": {"differences": ["Invalid JSON from model"], "gaps": []},
-    "unified_summary": "Could not generate structured summary.",
-    "confidence_score": 0.3,
-}
-
-# ─────────────────────────── CORE ────────────────────────────
-
-
-async def _call_groq(prompt: str) -> str:
-    """
-    Rate-limited, fully async Groq call.
-    The semaphore ensures we never exceed MAX_CONCURRENT_REQUESTS in-flight.
-    Also enforces requests-per-minute limit.
-    """
-    global _rate_limit_state
-
-    if len(prompt) > 12_000:
-        prompt = prompt[:12_000]
-
-    # Rate limit enforcement based on time window
-    current_time = time.time()
-    window_duration = 60.0  # 1 minute window
-
-    # Reset window if expired
-    if current_time - _rate_limit_state["window_start"] >= window_duration:
-        _rate_limit_state["request_count"] = 0
-        _rate_limit_state["window_start"] = current_time
-
-    # Check if we've hit rate limit
-    while (
-        _rate_limit_state["request_count"] >= _rate_limit_state["requests_per_minute"]
-    ):
-        wait_time = window_duration - (current_time - _rate_limit_state["window_start"])
-        if wait_time > 0:
-            logger.warning(
-                "Rate limit reached (%d req/min). Waiting %.1fs",
-                _rate_limit_state["requests_per_minute"],
-                wait_time,
-            )
-            await asyncio.sleep(wait_time)
-        current_time = time.time()
-        if current_time - _rate_limit_state["window_start"] >= window_duration:
-            _rate_limit_state["request_count"] = 0
-            _rate_limit_state["window_start"] = current_time
-
-    # Track request
-    _rate_limit_state["request_count"] += 1
-    _rate_limit_state["last_request_time"] = current_time
-
-    async with _semaphore:
-        client = AsyncGroq(api_key=GROQ_API_KEY)
-        try:
-            res = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=MODEL,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Return ONLY valid JSON. No explanation, no markdown.",
-                        },
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=0.5,
-                    max_tokens=1024,
-                ),
-                timeout=REQUEST_TIMEOUT,
-            )
-            return _clean(res.choices[0].message.content)
-        except TimeoutError:
-            logger.error("Groq API request timed out")
-            raise Exception("Groq API request timed out")
-        except Exception as e:
-            logger.error(f"Groq API error: {e}")
-            raise
-
-
-# ─────────────────────────── SINGLE PAPER ────────────────────
-
-
-def _build_single_prompt(paper: dict) -> str:
-    return f"""
-Summarize this research paper.
-
-Title: {paper.get("title", "N/A")}
-Abstract: {_truncate(paper.get("abstract"))}
-
-Return ONLY this JSON (no extra text):
-{{
-  "derived_content": {{
-    "abstract_compression": "one-sentence compression",
-    "key_points": ["point1", "point2"]
-  }},
-  "inferred_content": {{
-    "explanation_approach": "...",
-    "strengths": "...",
-    "limitations": "...",
-    "novelty_level": "low|medium|high"
-  }},
-  "key_takeaway": "...",
+_SINGLE_SYSTEM = (
+    "You are a precise research assistant. Summarise the paper using only the given "
+    "title and abstract. Respond with a single JSON object and nothing else."
+)
+_SINGLE_SCHEMA = """{
+  "abstract_compression": "one sentence capturing the core claim",
+  "key_points": ["contribution 1", "contribution 2"],
+  "methodology": "how the work was done",
+  "limitations": "stated or evident limitations ('' if none are evident)",
+  "strengths": "main strengths",
+  "novelty_level": "low|medium|high",
+  "key_takeaway": "one sentence for a busy researcher",
   "confidence_score": 0.0
-}}
-"""
+}"""
+
+_MULTI_SYSTEM = (
+    "You are a research synthesis assistant. Compare the papers using only the given "
+    "titles and abstracts. Respond with a single JSON object and nothing else."
+)
+_MULTI_SCHEMA = """{
+  "common_themes": ["theme"],
+  "key_combined_insights": ["insight"],
+  "differences": ["difference"],
+  "gaps": ["open question"],
+  "unified_summary": "a cohesive 1-2 paragraph synthesis citing papers as [n]",
+  "confidence_score": 0.0
+}"""
 
 
-async def _summarize_one(paper: dict) -> dict:
-    """Summarize a single paper asynchronously."""
+def _sentences(text: str | None) -> list[str]:
+    return [s.strip() for s in _SENTENCE.split(" ".join((text or "").split())) if s.strip()]
+
+
+def _as_text(value: Any) -> str:
+    if isinstance(value, list):
+        return "\n".join(f"• {str(v).strip()}" for v in value if str(v).strip())
+    return str(value or "").strip()
+
+
+def _input_confidence(paper: dict[str, Any]) -> float:
+    abstract = paper.get("abstract") or ""
+    if len(abstract) > 400:
+        return 0.8
+    if abstract:
+        return 0.6
+    return 0.3
+
+
+def extractive_summary(paper: dict[str, Any]) -> dict[str, Any]:
+    """Deterministic, offline summary from the abstract's own sentences."""
+    sents = _sentences(paper.get("abstract"))
+    lim = next(
+        (s for s in sents if re.search(r"\b(limit|however|future work|challenge)", s, re.I)), ""
+    )
+    method = next(
+        (
+            s
+            for s in sents
+            if re.search(r"\b(we propose|we present|we introduce|using|based on)", s, re.I)
+        ),
+        "",
+    )
+    return {
+        "paper_id": paper.get("id"),
+        "title": paper.get("title", ""),
+        "abstract_compression": sents[0] if sents else (paper.get("title") or ""),
+        "key_contributions": _as_text(sents[1:3]),
+        "methodology": method,
+        "limitations": lim,
+        "strengths": "",
+        "novelty_level": "",
+        "key_takeaway": sents[-1] if sents else "",
+        "confidence_score": round(_input_confidence(paper) * 0.6, 2),
+        "generated_by": "extractive",
+    }
+
+
+def _normalise(paper: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
     try:
-        raw = await _call_groq(_build_single_prompt(paper))
-        data = _safe_json(raw)
-        if not data:
-            return {**_FALLBACK_SINGLE, "title": paper.get("title", "")}
-        data.setdefault("confidence_score", _confidence(paper))
-        data["title"] = paper.get("title", "")
-        return data
-    except Exception as e:
-        return {**_FALLBACK_SINGLE, "error": str(e), "title": paper.get("title", "")}
+        confidence = float(data.get("confidence_score") or _input_confidence(paper))
+    except (TypeError, ValueError):
+        confidence = _input_confidence(paper)
+    return {
+        "paper_id": paper.get("id"),
+        "title": paper.get("title", ""),
+        "abstract_compression": _as_text(data.get("abstract_compression")),
+        "key_contributions": _as_text(data.get("key_points") or data.get("key_contributions")),
+        "methodology": _as_text(data.get("methodology") or data.get("explanation_approach")),
+        "limitations": _as_text(data.get("limitations")),
+        "strengths": _as_text(data.get("strengths")),
+        "novelty_level": _as_text(data.get("novelty_level")),
+        "key_takeaway": _as_text(data.get("key_takeaway")),
+        "confidence_score": max(0.0, min(confidence, 1.0)),
+        "generated_by": "llm",
+    }
 
 
-# ─────────────────────────── BATCH PARALLEL ──────────────────
+async def summarize_paper(paper: dict[str, Any]) -> dict[str, Any]:
+    if not paper.get("abstract"):
+        return extractive_summary(paper)
+    prompt = (
+        f"Title: {paper.get('title', 'N/A')}\n"
+        f"Abstract: {(paper.get('abstract') or '')[:_ABSTRACT_CHARS]}\n\n"
+        f"Return JSON with exactly these keys:\n{_SINGLE_SCHEMA}"
+    )
+    data = await get_llm().chat_json(_SINGLE_SYSTEM, prompt, max_tokens=700)
+    return _normalise(paper, data) if data else extractive_summary(paper)
 
 
-async def summarize_all_papers(
-    papers: list[dict], purpose: str = "general"
-) -> list[dict]:
-    """
-    🚀 Summarize ALL papers in parallel with a single gather call.
-    Replaces the old one-by-one loop — latency = slowest single call, not sum of all.
-    """
+async def summarize_all_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Summarise papers concurrently (bounded by the shared LLM limiter), preserving order."""
     if not papers:
         return []
-
-    papers = _deduplicate(papers)
-
-    # Fire all coroutines simultaneously, bounded by the semaphore
-    results = await asyncio.gather(
-        *[_summarize_one(p) for p in papers],
-        return_exceptions=False,  # individual errors caught inside _summarize_one
-    )
-    return list(results)
+    return list(await asyncio.gather(*(summarize_paper(p) for p in papers)))
 
 
-# ─────────────────────────── MULTI-DOC COMPARE ───────────────
-
-
-def _build_multi_prompt(docs: list[dict], conflicts: list[str]) -> str:
-    docs_text = "\n\n".join(
-        f"[{i + 1}] {d.get('title', 'Untitled')} ({d.get('year', '?')}): "
-        f"{_truncate(d.get('abstract'))}"
-        for i, d in enumerate(docs)
-    )
-    return f"""
-Compare the following research papers.
-
-{docs_text}
-
-Detected conflicts: {conflicts if conflicts else "None"}
-
-Return ONLY this JSON (no extra text):
-{{
-  "derived_content": {{
-    "common_themes": ["theme1"],
-    "key_combined_insights": ["insight1"]
-  }},
-  "inferred_content": {{
-    "differences": ["diff1"],
-    "gaps": ["gap1"]
-  }},
-  "unified_summary": "...",
-  "confidence_score": 0.0
-}}
-"""
-
-
-async def summarize_documents(docs: list[dict], purpose: str = "general") -> dict:
-    """
-    Produce a unified comparative summary for a list of papers.
-    Also runs individual summaries concurrently so the UI can show
-    both per-paper and combined results without waiting twice.
-    """
-    if not docs:
-        return {**_FALLBACK_MULTI, "error": "No documents provided"}
-
-    docs = _deduplicate(docs)
-    conflicts = _detect_conflicts(docs)
-
-    # Run individual + combined summarisation concurrently
-    individual_task = summarize_all_papers(docs, purpose)
-    combined_task = _call_groq(_build_multi_prompt(docs, conflicts))
-
-    individual_results, combined_raw = await asyncio.gather(
-        individual_task, combined_task
-    )
-
-    combined = _safe_json(combined_raw) or {**_FALLBACK_MULTI}
-    combined["individual_summaries"] = (
-        individual_results  # bonus: per-paper details for UI
-    )
-    return combined
-
-
-# ─────────────────────────── SYNTHESIS ───────────────────────
-
-
-async def synthesize_papers(papers: list[dict], purpose: str = "academic") -> str:
-    """
-    Entry point for the Discovery Agent → UI pipeline.
-    Returns the unified summary string (fast path).
-    Individual summaries are embedded in the payload for the UI layer.
-    """
+async def synthesize_papers(papers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Cross-paper synthesis. Always returns ``{"synthesis": str, ...structured fields}``."""
     if not papers:
-        return "No papers provided."
+        return {"synthesis": "No papers provided.", "generated_by": "none"}
+    docs = "\n\n".join(
+        f"[{i}] {p.get('title', 'Untitled')} ({p.get('year') or 'n.d.'}): "
+        f"{(p.get('abstract') or '')[:700]}"
+        for i, p in enumerate(papers, 1)
+    )
+    data = await get_llm().chat_json(
+        _MULTI_SYSTEM,
+        f"{docs}\n\nReturn JSON with exactly these keys:\n{_MULTI_SCHEMA}",
+        max_tokens=1200,
+    )
+    if data and data.get("unified_summary"):
+        return {**data, "synthesis": str(data["unified_summary"]).strip(), "generated_by": "llm"}
 
-    result = await summarize_documents(papers, purpose)
-    return result.get("unified_summary", "Synthesis failed.")
-
-
-# ─────────────────────────── FULL PIPELINE ───────────────────
-
-
-async def run_full_pipeline(papers: list[dict], purpose: str = "academic") -> dict:
-    """
-    🏎️  One call to rule them all.
-    Returns a structured payload the UI can render immediately:
-    {
-      "unified_summary":     str,
-      "individual_summaries": [ {title, key_takeaway, confidence_score, ...} ],
-      "derived_content":     { common_themes, key_combined_insights },
-      "inferred_content":    { differences, gaps },
-      "confidence_score":    float
+    lines = [
+        f"[{i}] {p.get('title', 'Untitled')} ({p.get('year') or 'n.d.'}): "
+        f"{(_sentences(p.get('abstract')) or ['No abstract available.'])[0]}"
+        for i, p in enumerate(papers, 1)
+    ]
+    return {
+        "synthesis": "Key claims of the selected papers (LLM unavailable, extractive view):\n"
+        + "\n".join(lines),
+        "generated_by": "extractive",
     }
-    """
-    if not papers:
-        return {**_FALLBACK_MULTI, "individual_summaries": []}
-
-    return await summarize_documents(papers, purpose)

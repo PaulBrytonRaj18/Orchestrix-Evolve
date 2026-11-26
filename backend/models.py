@@ -23,6 +23,13 @@ def generate_uuid() -> str:
 
 
 class User(Base):
+    """Legacy local user table from the pre-Supabase JWT auth.
+
+    Identity now lives in Supabase (``auth.users``); ``user_id`` columns store the
+    Supabase ``sub`` claim and deliberately have no FK to this table. The model is
+    kept only so ``migrate_to_supabase.py`` can read old SQLite databases.
+    """
+
     __tablename__ = "users"
 
     id = Column(String, primary_key=True, default=generate_uuid)
@@ -32,49 +39,25 @@ class User(Base):
     is_active = Column(Boolean, default=True)
     is_admin = Column(Boolean, default=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    sessions = relationship(
-        "Session", back_populates="user", cascade="all, delete-orphan"
-    )
-    digests = relationship(
-        "ScheduledDigest", back_populates="user", cascade="all, delete-orphan"
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
     name = Column(String, nullable=False)
     query = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user = relationship("User", back_populates="sessions")
-    papers = relationship(
-        "Paper", back_populates="session", cascade="all, delete-orphan"
-    )
-    analyses = relationship(
-        "Analysis", back_populates="session", cascade="all, delete-orphan"
-    )
-    syntheses = relationship(
-        "Synthesis", back_populates="session", cascade="all, delete-orphan"
-    )
-    conflicts = relationship(
-        "Conflict", back_populates="session", cascade="all, delete-orphan"
-    )
-    roadmaps = relationship(
-        "Roadmap", back_populates="session", cascade="all, delete-orphan"
-    )
-    digest_runs = relationship(
-        "DigestRun", back_populates="session", cascade="all, delete-orphan"
-    )
+    papers = relationship("Paper", back_populates="session", cascade="all, delete-orphan")
+    analyses = relationship("Analysis", back_populates="session", cascade="all, delete-orphan")
+    syntheses = relationship("Synthesis", back_populates="session", cascade="all, delete-orphan")
+    conflicts = relationship("Conflict", back_populates="session", cascade="all, delete-orphan")
+    roadmaps = relationship("Roadmap", back_populates="session", cascade="all, delete-orphan")
+    digest_runs = relationship("DigestRun", back_populates="session", cascade="all, delete-orphan")
 
 
 class Paper(Base):
@@ -92,9 +75,7 @@ class Paper(Base):
     external_id = Column(String, nullable=True, index=True)
     source = Column(String, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         Index("idx_papers_session_created", "session_id", "created_at"),
@@ -119,13 +100,9 @@ class Analysis(Base):
     analysis_type = Column(String, nullable=False)
     data_json = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (
-        Index("idx_analyses_session_type", "session_id", "analysis_type"),
-    )
+    __table_args__ = (Index("idx_analyses_session_type", "session_id", "analysis_type"),)
 
     session = relationship("Session", back_populates="analyses")
 
@@ -140,9 +117,7 @@ class Summary(Base):
     methodology = Column(Text, nullable=True)
     limitations = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     paper = relationship("Paper", back_populates="summary")
 
@@ -155,9 +130,7 @@ class Synthesis(Base):
     paper_ids = Column(JSON, nullable=False, default=list)
     content = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     session = relationship("Session", back_populates="syntheses")
 
@@ -172,9 +145,7 @@ class Citation(Base):
     ieee = Column(Text, nullable=True)
     chicago = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     paper = relationship("Paper", back_populates="citation")
 
@@ -186,9 +157,7 @@ class Note(Base):
     paper_id = Column(String, ForeignKey("papers.id"), nullable=False, index=True)
     content = Column(Text, nullable=False, default="")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     paper = relationship("Paper", back_populates="notes")
 
@@ -207,13 +176,9 @@ class Conflict(Base):
     resolved = Column(Boolean, default=False)
     resolution_notes = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (
-        Index("idx_conflicts_session_severity", "session_id", "severity"),
-    )
+    __table_args__ = (Index("idx_conflicts_session_severity", "session_id", "severity"),)
 
     session = relationship("Session", back_populates="conflicts")
 
@@ -222,7 +187,7 @@ class ScheduledDigest(Base):
     __tablename__ = "scheduled_digests"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    user_id = Column(String, nullable=True, index=True)
     name = Column(String, nullable=False)
     query = Column(String, nullable=False)
     frequency = Column(String, nullable=False, default="weekly")
@@ -231,11 +196,8 @@ class ScheduledDigest(Base):
     is_active = Column(Boolean, default=True)
     notify_email = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user = relationship("User", back_populates="digests")
     runs = relationship(
         "DigestRun", back_populates="scheduled_digest", cascade="all, delete-orphan"
     )
@@ -255,13 +217,9 @@ class DigestRun(Base):
     status = Column(String, nullable=False, default="pending")
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (
-        Index("idx_digest_runs_sched_status", "scheduled_digest_id", "status"),
-    )
+    __table_args__ = (Index("idx_digest_runs_sched_status", "scheduled_digest_id", "status"),)
 
     scheduled_digest = relationship("ScheduledDigest", back_populates="runs")
     session = relationship("Session", back_populates="digest_runs")
@@ -276,8 +234,6 @@ class Roadmap(Base):
     gap_areas_json = Column(JSON, nullable=False)
     next_queries_json = Column(JSON, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     session = relationship("Session", back_populates="roadmaps")

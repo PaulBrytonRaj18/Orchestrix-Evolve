@@ -7,7 +7,7 @@ Orchestrix is a full-stack web application that eliminates fragmentation in the 
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.12+ (3.12 and 3.13 tested)
 - Node.js 18+
 - npm or yarn
 
@@ -17,7 +17,7 @@ Orchestrix is a full-stack web application that eliminates fragmentation in the 
 
 ```bash
 git clone <repository-url>
-cd Evolve-Hackathon
+cd Orchestrix-Evolve
 ```
 
 ### 2. Backend Setup
@@ -29,14 +29,15 @@ cd backend
 python3.12 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
+# Install dependencies (requirements-dev.txt adds pytest, respx and ruff)
+pip install -r requirements-dev.txt
 
-# Copy environment file and add your API key
+# Configure: Supabase URL/service key, optional GROQ_API_KEY, SEMANTIC_SCHOLAR_API_KEY
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
 
-# The application will automatically create the SQLite database on first run
+# Without SUPABASE_DB_URL / DATABASE_URL a local SQLite file is used and created on
+# first run. For Postgres/Supabase apply migrations first:
+alembic upgrade head
 ```
 
 ### 3. Frontend Setup
@@ -71,17 +72,23 @@ The application will be available at:
 - Backend API: http://localhost:8000
 - API Documentation: http://localhost:8000/docs
 
-### 5. Docker Setup (Optional)
+### 5. Docker (optional)
 
 ```bash
-# Build and run both services
-docker compose up -d --build
+docker build -t orchestrix-backend --target production backend/
+docker run --env-file backend/.env -p 8000:8000 orchestrix-backend
+```
 
-# View logs
-docker compose logs -f
+The production image runs `alembic upgrade head` before starting uvicorn.
 
-# Stop everything
-docker compose down
+### 6. Tests
+
+```bash
+cd backend
+pytest                                   # 190 tests, SQLite, no network
+TEST_DATABASE_URL=postgresql://... pytest  # same suite against Postgres
+RUN_LIVE=1 pytest -m live                # contract checks against the real APIs
+ruff check . && ruff format --check .
 ```
 
 ## CI/CD
@@ -101,21 +108,29 @@ This project uses GitHub Actions for continuous integration and deployment:
 
 ```
 backend/
-├── main.py              # FastAPI entrypoint and REST endpoints
-├── orchestrator.py      # Central coordination layer
-├── scheduler.py         # Background task scheduler for digests
-├── models.py            # SQLAlchemy database models
-├── database.py          # Database session management
-├── schemas.py           # Pydantic request/response models
-├── requirements.txt     # Python dependencies
-├── .env.example         # Environment variables template
-└── agents/
-    ├── discovery.py      # Research Discovery Agent
-    ├── analysis.py       # Analysis Agent
-    ├── citation.py       # Citation Generator Agent
-    ├── summarizer.py     # Summarization Agent
-    ├── conflict_detector.py  # Conflict Detection Agent
-    └── digest_scheduler.py   # Scheduled Digest Agent
+├── main.py              # App wiring: middleware, error handlers, /health, routers
+├── config.py            # Typed settings (pydantic-settings) — the only env reader
+├── database.py          # SQLAlchemy engine/session (SQLite or Postgres via psycopg 3)
+├── models.py            # ORM models
+├── schemas.py           # Pydantic v2 request/response models
+├── auth.py              # Supabase JWT verification (JWKS or HS256) + Supabase clients
+├── llm.py               # Shared Groq client: JSON mode, rate limiter, concurrency cap
+├── rate_limit.py        # Auth endpoint rate limiting
+├── orchestrator.py      # Agent dependency graph, concurrent stages, per-agent trace
+├── scheduler.py         # APScheduler digest jobs
+├── routers/             # auth.py, sessions.py, digests.py
+├── services/
+│   └── persistence.py   # Saves orchestration output; eager-loaded session views
+├── agents/
+│   ├── discovery.py         # Semantic Scholar + arXiv + OpenAlex, TF-IDF ranking
+│   ├── analysis.py          # Trends, authors, keywords, citations, emerging topics
+│   ├── citation.py          # APA 7 / MLA 9 / IEEE / Chicago formatting
+│   ├── summarizer.py        # LLM summaries + synthesis (extractive fallback)
+│   ├── conflict_detector.py # Analysis-vs-summary contradiction heuristics
+│   ├── roadmap.py           # Foundational papers, gaps, next queries
+│   └── digest_scheduler.py  # "New since last run" search for digests
+├── alembic/             # Migrations (002 removes the user_id → users FKs)
+└── tests/               # API, auth, agents, orchestrator, live-contract tests
 ```
 
 ### Frontend (React + Vite)
@@ -243,16 +258,18 @@ frontend/
 
 ## Relevance Scoring Formula
 
-Papers are ranked using a weighted combination of three factors:
+After cross-source de-duplication (DOI, arXiv id, normalised title, title Jaccard ≥ 0.85),
+each paper gets a score in [0, 1]:
 
 ```
-score = 0.5 × normalize(citation_count) + 0.3 × normalize(year) + 0.2 × keyword_match_ratio
+score = 0.35 × tfidf_cosine(query, title+abstract)
+      + 0.20 × fraction of query terms present
+      + 0.25 × log(1 + citations) / log(1 + max_citations)
+      + 0.10 × normalised publication year
+      + 0.10 × venue tier
 ```
 
-Where:
-- **normalize(citation_count)**: Scales citations between 0-1 relative to the min/max in the result set
-- **normalize(year)**: Scales year between 0-1 relative to min/max (with min=1990)
-- **keyword_match_ratio**: Counts query words appearing in title+abstract, divided by total query words (stopwords removed)
+Citations are log-scaled because counts are heavy-tailed. Ranking runs in a worker thread.
 
 ## Safety Score Algorithm
 
@@ -261,7 +278,7 @@ The Safety Score feature is not applicable to this application as it focuses on 
 ## Multi-Agent Pipeline
 
 ### Agent 1: Discovery Agent
-Queries Semantic Scholar and arXiv APIs in parallel, normalizes results, deduplicates by title similarity, and computes relevance scores.
+Queries Semantic Scholar, arXiv and OpenAlex concurrently over one pooled HTTP client (bounded retries, `Retry-After` aware), normalises DOIs/arXiv ids, merges duplicates keeping the richest metadata, and ranks with the formula above. A failing source degrades the result set instead of failing the request.
 
 ### Agent 2: Analysis Agent
 Generates five types of analysis:
@@ -269,14 +286,14 @@ Generates five types of analysis:
 - **Top Authors**: Top 15 authors by frequency
 - **Keyword Frequency**: Top 40 keywords from abstracts
 - **Citation Distribution**: Histogram buckets (0, 1-10, 11-50, 51-200, 201-1000, 1000+)
-- **Emerging Topics**: Words with highest delta between recent (2020+) and historical frequency
+- **Emerging Topics**: Words with highest delta between the last three years and older papers
 
 ### Agent 3: Citation Generator Agent
-Uses Gemini API to generate properly formatted citations in APA, MLA, IEEE, and Chicago styles.
+Deterministic formatter for APA 7, MLA 9, IEEE and Chicago author-date (family-name/initials handling, et al. rules, DOI links). No LLM needed.
 
 ### Agent 4: Summarization Agent
 Two functions:
-- **summarize_paper**: Generates structured summary with abstract compression, key contributions, methodology, and limitations
+- **summarize_paper**: Groq LLM in JSON mode → abstract compression, key contributions, methodology, limitations (linked to the paper by id). Falls back to an extractive summary when no key is set or the call fails
 - **synthesize_papers**: Combines multiple papers into a cohesive paragraph identifying common themes, contradictions, and research gaps
 
 ### Agent 5: Conflict Detection Agent
@@ -288,7 +305,10 @@ Detects contradictions between Analysis and Summarization agents:
 - **Author Dominance Contradiction**: Few authors dominate vs underemphasized contributions
 - **Keyword Mismatch**: Analysis keywords vs summary emphasis
 
-### Agent 6: Digest Scheduler Agent
+### Agent 6: Roadmap Agent
+Ranks foundational papers by citation impact and velocity, derives gap areas from analysis, summaries and open conflicts, and proposes up to five runnable follow-up queries anchored on the session topic.
+
+### Agent 7: Digest Scheduler Agent
 Manages scheduled research digests:
 - Supports daily, weekly, biweekly, and monthly frequencies
 - Tracks papers seen to identify truly new papers
@@ -304,11 +324,17 @@ Manages scheduled research digests:
 | POST | /sessions | Create new session |
 | GET | /sessions | List all sessions |
 | GET | /sessions/{id} | Get session with all data |
+| DELETE | /sessions/{id} | Delete a session and its data |
 | POST | /sessions/{id}/orchestrate | Run orchestration pipeline |
 | PATCH | /papers/{id}/note | Update paper note |
 | POST | /sessions/{id}/synthesize | Synthesize selected papers |
 | GET | /sessions/{id}/export/bib | Export as BibTeX |
-| GET | /sessions/{id}/export/txt | Export citations as text |
+| GET | /sessions/{id}/export/txt?style=apa\|mla\|ieee\|chicago | Export citations as text |
+| POST | /sessions/{id}/roadmap | Rebuild roadmap from stored data |
+| GET | /sessions/{id}/roadmap | Get roadmap |
+| POST | /sessions/{id}/roadmap/query?query=… | Run a suggested query into the session |
+
+All endpoints except `/health` and `/auth/register|login|refresh` require `Authorization: Bearer <Supabase access token>`.
 
 ### Conflict Resolution Endpoints
 | Method | Endpoint | Description |
@@ -340,23 +366,37 @@ Manages scheduled research digests:
 - **Documentation**: https://arxiv.org/help/api
 - **Rate Limits**: 1 request per 3 seconds
 
-### Google Gemini API
-- **Purpose**: AI-powered citation formatting and summarization
-- **Documentation**: https://ai.google.dev/docs
-- **Requirements**: API key in .env file
+### OpenAlex API
+- **Purpose**: Open scholarly metadata, citation counts, abstracts
+- **Documentation**: https://docs.openalex.org/
+- **Tip**: set `OPENALEX_MAILTO` to join the faster polite pool
+
+### Groq API
+- **Purpose**: LLM summaries, synthesis and (optional) LLM workflow planning
+- **Documentation**: https://console.groq.com/docs
+- **Optional**: without `GROQ_API_KEY` extractive summaries are used
+
+Semantic Scholar's anonymous tier is heavily rate-limited on shared IPs; set
+`SEMANTIC_SCHOLAR_API_KEY` in production.
 
 ## Environment Variables
 
-### Backend (.env)
-```
-GEMINI_API_KEY=your_gemini_api_key_here
-DATABASE_URL=sqlite:///./orchestrix.db
-FRONTEND_URL=http://localhost:5173
-```
+See [`backend/.env.example`](backend/.env.example) for the full, commented list. Key ones:
+
+| Variable | Purpose |
+|----------|---------|
+| `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` | Auth (JWT verification via JWKS, admin calls) |
+| `SUPABASE_JWT_SECRET` | Only for legacy HS256-signed projects |
+| `SUPABASE_DB_URL` / `DATABASE_URL` | Database; empty → local SQLite |
+| `GROQ_API_KEY` | LLM summaries (optional) |
+| `SEMANTIC_SCHOLAR_API_KEY`, `OPENALEX_MAILTO` | Better discovery rate limits |
+| `ENABLE_SCHEDULER` | `true` on exactly one process |
 
 ### Frontend (.env)
 ```
 VITE_API_BASE_URL=http://localhost:8000
+VITE_SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
 ## Features

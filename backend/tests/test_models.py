@@ -37,20 +37,15 @@ class TestGenerateUuid:
         assert len(set(values)) == 100
 
 
-
 class TestUserModel:
     def test_user_creation(self):
-        user = User(
-            email="test@example.com", username="testuser", hashed_password="hashed123"
-        )
+        user = User(email="test@example.com", username="testuser", hashed_password="hashed123")
         assert user.email == "test@example.com"
         assert user.username == "testuser"
         assert user.hashed_password == "hashed123"
 
     def test_user_defaults(self):
-        user = User(
-            email="test2@example.com", username="testuser2", hashed_password="hashed456"
-        )
+        user = User(email="test2@example.com", username="testuser2", hashed_password="hashed456")
         assert user.id is None
         assert user.created_at is None
 
@@ -67,9 +62,7 @@ class TestSessionModel:
         assert session.user_id is None
 
     def test_session_with_user(self):
-        session = Session(
-            name="User Session", query="deep learning", user_id="user-123"
-        )
+        session = Session(name="User Session", query="deep learning", user_id="user-123")
         assert session.user_id == "user-123"
 
 

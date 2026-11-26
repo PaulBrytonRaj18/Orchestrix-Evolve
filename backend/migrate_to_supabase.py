@@ -18,19 +18,13 @@ import argparse
 import logging
 import sys
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Migrate Orchestrix database to PostgreSQL"
-    )
-    parser.add_argument(
-        "--source", default="./orchestrix.db", help="Path to SQLite database"
-    )
+    parser = argparse.ArgumentParser(description="Migrate Orchestrix database to PostgreSQL")
+    parser.add_argument("--source", default="./orchestrix.db", help="Path to SQLite database")
     parser.add_argument(
         "--target", help="PostgreSQL connection string (or set SUPABASE_DB_URL env var)"
     )
@@ -64,7 +58,7 @@ def export_sqlite_data(db_path):
             rows = result.fetchall()
             data[table] = {
                 "columns": list(columns),
-                "rows": [dict(zip(columns, row)) for row in rows],
+                "rows": [dict(zip(columns, row, strict=False)) for row in rows],
             }
             logger.info(f"  - Exported {len(rows)} rows")
 
@@ -191,23 +185,15 @@ def main():
 
     load_dotenv()
 
-    target_url = (
-        args.target
-        or os.environ.get("SUPABASE_DB_URL")
-        or os.environ.get("DATABASE_URL")
-    )
+    target_url = args.target or os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL")
 
     if not target_url:
-        logger.error(
-            "No target database URL provided. Use --target or set SUPABASE_DB_URL"
-        )
+        logger.error("No target database URL provided. Use --target or set SUPABASE_DB_URL")
         print(__doc__)
         sys.exit(1)
 
     if "sqlite" in target_url.lower():
-        logger.error(
-            "Target URL appears to be SQLite. Please provide a PostgreSQL URL."
-        )
+        logger.error("Target URL appears to be SQLite. Please provide a PostgreSQL URL.")
         sys.exit(1)
 
     logger.info(f"Source database: {args.source}")
