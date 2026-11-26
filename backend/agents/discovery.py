@@ -1,33 +1,31 @@
+"""Research Discovery Agent — Semantic Scholar, arXiv and OpenAlex.
+
+Pipeline: fetch all sources concurrently over one pooled HTTP client → normalise
+identifiers → merge duplicates (keeping the richest metadata) → TF-IDF similarity →
+weighted relevance score → top-N.
+
+The CPU-bound ranking runs in a worker thread so it never blocks the event loop.
 """
-Research Discovery Agent - Queries Semantic Scholar, arXiv, and OpenAlex APIs.
-"""
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import math
-import os
 import re
 from collections import Counter
-from datetime import datetime
-from urllib.parse import quote
+from datetime import UTC, date, datetime
+from typing import Any
 
 import feedparser
 import httpx
-from dotenv import load_dotenv
 
+from config import get_settings
 from constants import STOPWORDS
 
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-SEMANTIC_SCHOLAR_URL = os.getenv("SEMANTIC_SCHOLAR_URL", "https://api.semanticscholar.org/graph/v1/paper/search")
-ARXIV_URL = os.getenv("ARXIV_URL", "https://export.arxiv.org/api/query")
-OPENALEX_URL = os.getenv("OPENALEX_URL", "https://api.openalex.org/works")
-
-DEFAULT_LIMIT = 50
-REQUEST_TIMEOUT = 30.0
+SOURCES = ("semantic_scholar", "arxiv", "openalex")
 
 VENUE_TIERS = {
     "neurips": 1.0, "nips": 1.0, "neural information processing systems": 1.0,
@@ -42,7 +40,6 @@ VENUE_TIERS = {
     "emnlp": 1.0, "empirical methods in natural language processing": 1.0,
     "naacl": 1.0, "north american chapter of the acl": 1.0,
     "coling": 1.0, "computational linguistics": 1.0,
-    "arxiv": 0.5,
     "nature": 1.0, "science": 1.0, "cell": 1.0,
     "jmlr": 1.0, "journal of machine learning research": 1.0,
     "pami": 1.0, "pattern analysis and machine intelligence": 1.0,
@@ -54,100 +51,339 @@ VENUE_TIERS = {
     "icra": 0.7, "robotics and automation": 0.7,
     "aistats": 0.7, "artificial intelligence and statistics": 0.7,
     "uai": 0.7, "uncertainty in artificial intelligence": 0.7,
-    "alt": 0.7, "algorithmic learning theory": 0.7,
-    "bioinformatics": 0.6, "plos": 0.5, "ieee": 0.6, "acm": 0.6,
-    "springer": 0.5, "elsevier": 0.5,
-}
+    "algorithmic learning theory": 0.7,
+    "bioinformatics": 0.6, "ieee": 0.6, "acm": 0.6,
+    "arxiv": 0.5, "plos": 0.5, "springer": 0.5, "elsevier": 0.5,
+}  # fmt: skip
+
+_ARXIV_VERSION = re.compile(r"v\d+$")
+_WORD = re.compile(r"[a-z0-9]+")
 
 
-def decode_inverted_index(inverted_index: dict | None) -> str:
-    if not inverted_index:
-        return ""
-    try:
-        words = []
-        for pos in sorted(inverted_index.keys(), key=int):
-            words.append(inverted_index[pos])
-        return " ".join(words)
-    except Exception:
-        return ""
+# ─── Text helpers ────────────────────────────────────────────────────────────
 
 
-def normalize_text(text: str) -> str:
+def normalize_text(text: str | None) -> str:
     if not text:
         return ""
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    return " ".join(_WORD.findall(text.lower()))
 
 
-def compute_semantic_similarity(query: str, papers: list[dict]) -> list[dict]:
-    if not papers:
-        return papers
+def tokenize(text: str | None) -> list[str]:
+    return [w for w in _WORD.findall((text or "").lower()) if len(w) > 1 and w not in STOPWORDS]
 
-    query_normalized = normalize_text(query)
-    query_normalized.split()
 
-    def tokenize(text: str) -> list[str]:
-        words = normalize_text(text).split()
-        return [w for w in words if w not in STOPWORDS and len(w) > 1]
+def decode_inverted_index(inverted_index: dict[str, list[int]] | None) -> str:
+    """OpenAlex stores abstracts as ``{word: [positions...]}``; rebuild the text."""
+    if not inverted_index:
+        return ""
+    positioned: list[tuple[int, str]] = []
+    for word, positions in inverted_index.items():
+        if isinstance(positions, list):
+            positioned.extend((p, word) for p in positions if isinstance(p, int))
+    positioned.sort()
+    return " ".join(word for _, word in positioned)
 
-    all_docs = [query_normalized]
-    for paper in papers:
-        title = normalize_text(paper.get("title", ""))
-        abstract = normalize_text(paper.get("abstract", "")[:1000])
-        all_docs.append(f"{title} {abstract}")
 
-    word_counts = Counter()
-    for doc in all_docs:
-        words = tokenize(doc)
-        word_counts.update(words)
+def normalize_doi(doi: str | None) -> str:
+    if not doi:
+        return ""
+    doi = doi.strip().lower()
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi:"):
+        if doi.startswith(prefix):
+            doi = doi[len(prefix) :]
+    return doi
 
-    vocab = [word for word, _ in word_counts.most_common(1000)]
-    word_to_idx = {word: i for i, word in enumerate(vocab)}
 
-    n_docs = len(all_docs)
-    doc_vectors = []
+def normalize_arxiv_id(arxiv_id: str | None) -> str:
+    if not arxiv_id:
+        return ""
+    arxiv_id = arxiv_id.strip().lower().rsplit("/abs/", 1)[-1].removeprefix("arxiv:")
+    return _ARXIV_VERSION.sub("", arxiv_id)
 
-    for doc_idx, doc in enumerate(all_docs):
-        words = tokenize(doc)
-        doc_word_counts = Counter(words)
 
-        tf = {}
-        for word, count in doc_word_counts.items():
-            if word in word_to_idx:
-                tf[word] = count / len(words) if words else 0
+def _make_paper(
+    *,
+    title: str | None,
+    authors: list[str],
+    year: int | None,
+    abstract: str | None,
+    source_url: str | None,
+    citation_count: int | None,
+    source: str,
+    venue: str | None = "",
+    doi: str | None = "",
+    arxiv_id: str | None = "",
+    publication_date: str | None = None,
+) -> dict[str, Any]:
+    doi_n, arxiv_n = normalize_doi(doi), normalize_arxiv_id(arxiv_id)
+    return {
+        "title": " ".join((title or "Untitled").split()),
+        "authors": [a for a in authors if a][:50],
+        "year": year,
+        "abstract": " ".join((abstract or "").split())[:5000] or None,
+        "source_url": source_url or (f"https://doi.org/{doi_n}" if doi_n else None),
+        "citation_count": citation_count,
+        "external_id": (f"arxiv:{arxiv_n}" if arxiv_n else doi_n) or None,
+        "doi": doi_n or None,
+        "arxiv_id": arxiv_n or None,
+        "source": source,
+        "venue": venue or "",
+        "publication_date": publication_date,
+    }
 
-        idf = {}
-        for word in word_to_idx:
-            doc_count = sum(1 for d in all_docs if word in tokenize(d))
-            idf[word] = math.log(n_docs / (1 + doc_count)) + 1
 
-        vector = [0.0] * len(vocab)
-        for word, tf_val in tf.items():
-            idx = word_to_idx[word]
-            vector[idx] = tf_val * idf[word]
+# ─── HTTP ────────────────────────────────────────────────────────────────────
 
-        doc_vectors.append(vector)
 
-    def normalize(v):
-        magnitude = math.sqrt(sum(x * x for x in v))
-        if magnitude == 0:
-            return v
-        return [x / magnitude for x in v]
+async def fetch_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    max_retries: int = 2,
+    max_wait: float = 5.0,
+) -> httpx.Response | None:
+    """GET with bounded exponential backoff on 429/5xx/network errors.
 
-    query_vec = normalize(doc_vectors[0])
-    paper_vectors = [normalize(v) for v in doc_vectors[1:]]
+    Honours ``Retry-After`` but never waits longer than ``max_wait`` per attempt, so a
+    rate-limited source degrades the result set instead of stalling the request.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            response = await client.get(url, params=params, headers=headers)
+        except httpx.RequestError as exc:
+            logger.warning("%s request error: %s", url, exc)
+            if attempt == max_retries:
+                return None
+            await asyncio.sleep(min(2**attempt, max_wait))
+            continue
+        if response.status_code == 200:
+            return response
+        if response.status_code == 429 or response.status_code >= 500:
+            if attempt == max_retries:
+                logger.warning(
+                    "%s gave HTTP %s after %d attempts", url, response.status_code, attempt + 1
+                )
+                return None
+            retry_after = response.headers.get("Retry-After", "")
+            wait = float(retry_after) if retry_after.isdigit() else 2**attempt
+            await asyncio.sleep(min(wait, max_wait))
+            continue
+        logger.error("%s gave HTTP %s: %s", url, response.status_code, response.text[:200])
+        return None
+    return None
 
-    for i, paper in enumerate(papers):
-        paper_vec = paper_vectors[i]
-        similarity = sum(q * p for q, p in zip(query_vec, paper_vec))
-        paper["semantic_score"] = float(similarity)
 
+# ─── Sources ─────────────────────────────────────────────────────────────────
+
+
+async def query_semantic_scholar(
+    client: httpx.AsyncClient, query: str, page: int, limit: int, since: date | None = None
+) -> list[dict[str, Any]]:
+    s = get_settings()
+    params: dict[str, Any] = {
+        "query": query,
+        "fields": "title,authors,year,abstract,externalIds,citationCount,url,venue,publicationDate",
+        "limit": min(limit, 100),
+        "offset": page * min(limit, 100),
+    }
+    if since:
+        params["publicationDateOrYear"] = f"{since.isoformat()}:"
+    headers = {"x-api-key": s.semantic_scholar_api_key} if s.semantic_scholar_api_key else None
+    response = await fetch_with_retry(client, s.semantic_scholar_url, params, headers)
+    if response is None:
+        return []
+    papers = []
+    for item in response.json().get("data") or []:
+        ids = item.get("externalIds") or {}
+        papers.append(
+            _make_paper(
+                title=item.get("title"),
+                authors=[a.get("name", "") for a in item.get("authors") or []],
+                year=item.get("year"),
+                abstract=item.get("abstract"),
+                source_url=item.get("url"),
+                citation_count=item.get("citationCount"),
+                source="semantic_scholar",
+                venue=item.get("venue"),
+                doi=ids.get("DOI"),
+                arxiv_id=ids.get("ArXiv"),
+                publication_date=item.get("publicationDate"),
+            )
+        )
     return papers
 
 
-def get_venue_quality(venue: str) -> float:
+def _arxiv_search_query(query: str, since: date | None) -> str:
+    terms = [t for t in re.findall(r"\w+", query) if t.lower() not in STOPWORDS] or query.split()
+    expr = " AND ".join(f"all:{t}" for t in terms[:12])
+    if since:
+        expr = f"({expr}) AND submittedDate:[{since:%Y%m%d}0000 TO 209912312359]"
+    return expr
+
+
+async def query_arxiv(
+    client: httpx.AsyncClient, query: str, page: int, limit: int, since: date | None = None
+) -> list[dict[str, Any]]:
+    s = get_settings()
+    limit = min(limit, 100)
+    params = {
+        "search_query": _arxiv_search_query(query, since),
+        "start": page * limit,
+        "max_results": limit,
+        "sortBy": "submittedDate" if since else "relevance",
+        "sortOrder": "descending",
+    }
+    response = await fetch_with_retry(client, s.arxiv_url, params)
+    if response is None:
+        return []
+    feed = feedparser.parse(response.text)
+    papers = []
+    for entry in feed.entries:
+        published = entry.get("published", "")
+        year = int(published[:4]) if published[:4].isdigit() else None
+        papers.append(
+            _make_paper(
+                title=entry.get("title"),
+                authors=[a.get("name", "") for a in entry.get("authors", [])],
+                year=year,
+                abstract=entry.get("summary"),
+                source_url=entry.get("id"),
+                citation_count=None,
+                source="arxiv",
+                venue="arXiv",
+                doi=entry.get("arxiv_doi"),
+                arxiv_id=entry.get("id"),
+                publication_date=published[:10] or None,
+            )
+        )
+    return papers
+
+
+async def query_openalex(
+    client: httpx.AsyncClient, query: str, page: int, limit: int, since: date | None = None
+) -> list[dict[str, Any]]:
+    s = get_settings()
+    params: dict[str, Any] = {
+        "search": query,
+        "per_page": min(limit, 200),
+        "page": page + 1,
+        "select": "id,title,authorships,publication_year,publication_date,doi,"
+        "cited_by_count,primary_location,abstract_inverted_index,ids",
+    }
+    if since:
+        params["filter"] = f"from_publication_date:{since.isoformat()}"
+    if s.openalex_mailto:
+        params["mailto"] = s.openalex_mailto
+    response = await fetch_with_retry(client, s.openalex_url, params)
+    if response is None:
+        return []
+    papers = []
+    for item in response.json().get("results") or []:
+        location = item.get("primary_location") or {}
+        source = location.get("source") or {}
+        arxiv_id = ""
+        landing = location.get("landing_page_url") or ""
+        if "arxiv.org/abs/" in landing:
+            arxiv_id = landing
+        papers.append(
+            _make_paper(
+                title=item.get("title"),
+                authors=[
+                    (a.get("author") or {}).get("display_name", "")
+                    for a in (item.get("authorships") or [])[:50]
+                ],
+                year=item.get("publication_year"),
+                abstract=decode_inverted_index(item.get("abstract_inverted_index")),
+                source_url=item.get("doi") or landing or item.get("id"),
+                citation_count=item.get("cited_by_count"),
+                source="openalex",
+                venue=source.get("display_name"),
+                doi=item.get("doi"),
+                arxiv_id=arxiv_id,
+                publication_date=item.get("publication_date"),
+            )
+        )
+    return papers
+
+
+_FETCHERS = {
+    "semantic_scholar": query_semantic_scholar,
+    "arxiv": query_arxiv,
+    "openalex": query_openalex,
+}
+
+
+async def fetch_all_sources(
+    query: str,
+    page: int = 0,
+    limit: int | None = None,
+    since: date | None = None,
+    sources: tuple[str, ...] = SOURCES,
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Query every source concurrently. Returns ``(papers, {source: count or -1 on error})``."""
+    s = get_settings()
+    limit = limit or s.discovery_per_source_limit
+    async with httpx.AsyncClient(
+        timeout=s.discovery_timeout,
+        follow_redirects=True,
+        headers={"User-Agent": "Orchestrix/2.1 (research discovery)"},
+    ) as client:
+        results = await asyncio.gather(
+            *(_FETCHERS[name](client, query, page, limit, since) for name in sources),
+            return_exceptions=True,
+        )
+    papers: list[dict[str, Any]] = []
+    stats: dict[str, int] = {}
+    for name, result in zip(sources, results, strict=True):
+        if isinstance(result, BaseException):
+            logger.error("Discovery source %s failed: %s", name, result)
+            stats[name] = -1
+        else:
+            stats[name] = len(result)
+            papers.extend(result)
+    return papers, stats
+
+
+# ─── Ranking ─────────────────────────────────────────────────────────────────
+
+
+def compute_semantic_similarity(query: str, papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """TF-IDF cosine similarity between the query and each paper's title + abstract.
+
+    Each document is tokenised exactly once and document frequencies are computed in
+    one pass: O(total tokens). (The previous version re-tokenised every document for
+    every vocabulary word inside the per-document loop — cubic, ~70 s for 60 papers.)
+    """
+    if not papers:
+        return papers
+    docs = [tokenize(query)] + [
+        tokenize(f"{p.get('title', '')} {(p.get('abstract') or '')[:2000]}") for p in papers
+    ]
+    n_docs = len(docs)
+    df: Counter[str] = Counter()
+    for tokens in docs:
+        df.update(set(tokens))
+    idf = {w: math.log(n_docs / (1 + c)) + 1.0 for w, c in df.items()}
+
+    def vector(tokens: list[str]) -> dict[str, float]:
+        if not tokens:
+            return {}
+        tf = Counter(tokens)
+        total = len(tokens)
+        vec = {w: (c / total) * idf[w] for w, c in tf.items()}
+        norm = math.sqrt(sum(v * v for v in vec.values()))
+        return {w: v / norm for w, v in vec.items()} if norm else vec
+
+    query_vec = vector(docs[0])
+    for paper, tokens in zip(papers, docs[1:], strict=True):
+        pv = vector(tokens)
+        paper["semantic_score"] = float(sum(v * pv.get(w, 0.0) for w, v in query_vec.items()))
+    return papers
+
+
+def get_venue_quality(venue: str | None) -> float:
     if not venue:
         return 0.3
     venue_lower = venue.lower()
@@ -162,346 +398,131 @@ def compute_similarity(title1: str, title2: str) -> float:
     words2 = set(normalize_text(title2).split())
     if not words1 or not words2:
         return 0.0
-    intersection = len(words1 & words2)
-    union = len(words1 | words2)
-    return intersection / union if union > 0 else 0.0
+    return len(words1 & words2) / len(words1 | words2)
 
 
 def compute_relevance_score(
-    paper: dict, query: str,
-    min_citations: int, max_citations: int,
-    min_year: int, max_year: int,
+    paper: dict[str, Any],
+    query: str,
+    max_citations: int,
+    min_year: int,
+    max_year: int,
 ) -> float:
-    score = 0.0
+    """Weighted blend in [0, 1]: semantic 35%, keyword 20%, citations 25%, recency 10%, venue 10%.
 
+    Citations are log-scaled: counts are heavy-tailed, and linear scaling let one
+    landmark paper flatten every other paper's citation score to ~0.
+    """
     citations = paper.get("citation_count") or 0
-    if max_citations > min_citations:
-        citation_score = (citations - min_citations) / (max_citations - min_citations)
-    else:
-        citation_score = 0.5
-    score += 0.30 * citation_score
+    citation_score = math.log1p(citations) / math.log1p(max_citations) if max_citations > 0 else 0.0
 
     year = paper.get("year") or min_year
-    if max_year > min_year:
-        year_score = (year - min_year) / (max_year - min_year)
-    else:
-        year_score = 0.5
-    score += 0.15 * year_score
+    year_score = (year - min_year) / (max_year - min_year) if max_year > min_year else 0.5
 
-    query_words = normalize_text(query).split()
-    if query_words:
-        title_abstract = normalize_text(
-            f"{paper.get('title', '')} {paper.get('abstract', '')}"
-        )
-        matches = sum(1 for kw in query_words if kw in title_abstract)
-        keyword_score = matches / len(query_words)
-        score += 0.20 * keyword_score
+    query_words = set(tokenize(query))
+    text = set(tokenize(f"{paper.get('title', '')} {paper.get('abstract') or ''}"))
+    keyword_score = len(query_words & text) / len(query_words) if query_words else 0.0
 
-    semantic_score = paper.get("semantic_score", 0.5)
-    score += 0.25 * semantic_score
-
-    venue = paper.get("venue", "")
-    venue_score = get_venue_quality(venue)
-    score += 0.10 * venue_score
-
-    return round(score, 4)
+    score = (
+        0.35 * paper.get("semantic_score", 0.0)
+        + 0.20 * keyword_score
+        + 0.25 * citation_score
+        + 0.10 * year_score
+        + 0.10 * get_venue_quality(paper.get("venue"))
+    )
+    return round(min(max(score, 0.0), 1.0), 4)
 
 
-def deduplicate_papers(papers: list[dict], threshold: float = 0.7) -> list[dict]:
-    if not papers:
-        return papers
+def _merge(primary: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """Fill gaps in ``primary`` from a duplicate record of the same work."""
+    for key in ("abstract", "year", "doi", "arxiv_id", "venue", "source_url", "publication_date"):
+        if not primary.get(key) and other.get(key):
+            primary[key] = other[key]
+    if (other.get("citation_count") or 0) > (primary.get("citation_count") or 0):
+        primary["citation_count"] = other["citation_count"]
+    if len(other.get("authors") or []) > len(primary.get("authors") or []):
+        primary["authors"] = other["authors"]
+    if primary.get("arxiv_id") and not primary.get("doi"):
+        primary["external_id"] = f"arxiv:{primary['arxiv_id']}"
+    elif primary.get("doi"):
+        primary["external_id"] = primary["doi"]
+    return primary
 
-    seen: dict[str, dict] = {}
+
+def deduplicate_papers(
+    papers: list[dict[str, Any]], threshold: float = 0.85
+) -> list[dict[str, Any]]:
+    """Collapse the same work reported by several sources.
+
+    Matches on DOI, arXiv id, exact normalised title, then title Jaccard ≥ threshold.
+    The record with more citations wins and missing fields are merged in.
+    """
+    unique: list[dict[str, Any]] = []
+    by_key: dict[str, int] = {}
+
     for paper in papers:
-        norm_title = normalize_text(paper.get("title", ""))
+        norm_title = normalize_text(paper.get("title"))
         if not norm_title:
             continue
-        if norm_title not in seen:
-            seen[norm_title] = paper
-        elif (paper.get("citation_count") or 0) > (
-            seen[norm_title].get("citation_count") or 0
-        ):
-            seen[norm_title] = paper
+        keys = [f"t:{norm_title}"]
+        if paper.get("doi"):
+            keys.append(f"d:{paper['doi']}")
+        if paper.get("arxiv_id"):
+            keys.append(f"a:{paper['arxiv_id']}")
 
-    result = list(seen.values())
-    unique_papers = []
-
-    for paper in result:
-        is_duplicate = False
-        for unique in unique_papers:
-            if compute_similarity(paper.get("title", ""), unique.get("title", "")) >= threshold:
-                is_duplicate = True
-                if (paper.get("citation_count") or 0) > (unique.get("citation_count") or 0):
-                    unique_papers.remove(unique)
-                    unique_papers.append(paper)
-                break
-        if not is_duplicate:
-            unique_papers.append(paper)
-
-    return unique_papers
-
-
-async def fetch_with_retry(
-    client: httpx.AsyncClient, url: str, params: dict = None, max_retries: int = 3
-) -> dict | None:
-    for attempt in range(max_retries):
-        try:
-            response = await client.get(
-                url, params=params, timeout=REQUEST_TIMEOUT, follow_redirects=True
+        idx = next((by_key[k] for k in keys if k in by_key), None)
+        if idx is None:
+            idx = next(
+                (
+                    i
+                    for i, u in enumerate(unique)
+                    if compute_similarity(paper["title"], u["title"]) >= threshold
+                ),
+                None,
             )
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429:
-                wait = 2**attempt
-                logger.warning(f"Rate limited, waiting {wait}s")
-                await asyncio.sleep(wait)
-            elif e.response.status_code >= 500:
-                wait = 2**attempt
-                logger.warning(f"Server error, retrying in {wait}s")
-                await asyncio.sleep(wait)
+        if idx is None:
+            unique.append(dict(paper))
+            idx = len(unique) - 1
+        else:
+            existing = unique[idx]
+            if (paper.get("citation_count") or 0) > (existing.get("citation_count") or 0):
+                unique[idx] = _merge(dict(paper), existing)
             else:
-                logger.error(f"HTTP error: {e}")
-                return None
-        except httpx.RequestError as e:
-            logger.error(f"Request error: {e}")
-            if attempt == max_retries - 1:
-                return None
-            await asyncio.sleep(2**attempt)
-    return None
+                _merge(existing, paper)
+        for k in keys:
+            by_key[k] = idx
+    return unique
 
 
-async def query_semantic_scholar(
-    query: str, page: int = 0, limit: int = DEFAULT_LIMIT
-) -> list[dict]:
-    try:
-        async with httpx.AsyncClient() as client:
-            params = {
-                "query": query,
-                "fields": "title,authors,year,abstract,externalIds,citationCount,url,venue",
-                "limit": min(limit, 100),
-                "offset": page * limit,
-                "sort": "relevance",
-            }
-
-            data = await fetch_with_retry(client, SEMANTIC_SCHOLAR_URL, params)
-
-            if not data or "data" not in data:
-                return []
-
-            papers = []
-            for item in data["data"]:
-                authors = [a.get("name", "Unknown") for a in item.get("authors", [])]
-                external_ids = item.get("externalIds", {})
-
-                papers.append({
-                    "title": item.get("title", "Untitled"),
-                    "authors": authors,
-                    "year": item.get("year"),
-                    "abstract": item.get("abstract"),
-                    "source_url": item.get("url"),
-                    "citation_count": item.get("citationCount"),
-                    "external_id": external_ids.get("ArXiv") or external_ids.get("DOI", ""),
-                    "source": "semantic_scholar",
-                    "venue": item.get("venue", ""),
-                })
-            return papers
-    except Exception as e:
-        logger.error(f"Semantic Scholar error: {e}")
+def rank_papers(query: str, papers: list[dict[str, Any]], return_top: int) -> list[dict[str, Any]]:
+    """Pure CPU work: dedupe → similarity → score → sort. Run via ``asyncio.to_thread``."""
+    papers = deduplicate_papers(papers)
+    if not papers:
         return []
-
-
-async def query_arxiv(
-    query: str, page: int = 0, limit: int = DEFAULT_LIMIT
-) -> list[dict]:
-    try:
-        async with httpx.AsyncClient() as client:
-            search_query = f"all:{query.replace(' ', '+')}"
-            start = page * limit
-            url = (
-                f"{ARXIV_URL}?search_query={quote(search_query)}"
-                f"&start={start}&max_results={min(limit, 50)}&sortBy=relevance"
-            )
-
-            response = await client.get(url, timeout=REQUEST_TIMEOUT, follow_redirects=True)
-            response.raise_for_status()
-
-            feed = feedparser.parse(response.text)
-
-            papers = []
-            for entry in feed.entries:
-                authors = [a.get("name", "Unknown") for a in entry.get("authors", [])]
-
-                abstract = ""
-                if hasattr(entry, "summary"):
-                    abstract = entry.summary
-                elif hasattr(entry, "summary_detail"):
-                    abstract = entry.summary_detail.get("value", "")
-
-                paper_id = ""
-                if hasattr(entry, "id"):
-                    paper_id = entry.id.split("/")[-1].replace("arxiv:", "")
-
-                year = None
-                if hasattr(entry, "published"):
-                    try:
-                        year = int(entry.published[:4])
-                    except (ValueError, TypeError):
-                        pass
-
-                papers.append({
-                    "title": entry.get("title", "Untitled").replace("\n", " ").strip(),
-                    "authors": authors,
-                    "year": year,
-                    "abstract": abstract.replace("\n", " ")[:2000] if abstract else "",
-                    "source_url": entry.get("id", ""),
-                    "citation_count": None,
-                    "external_id": paper_id,
-                    "source": "arxiv",
-                    "venue": "arXiv",
-                })
-            return papers
-    except Exception as e:
-        logger.error(f"arXiv error: {e}")
-        return []
-
-
-async def query_openalex(
-    query: str, page: int = 0, limit: int = DEFAULT_LIMIT
-) -> list[dict]:
-    try:
-        async with httpx.AsyncClient() as client:
-            url = (
-                f"{OPENALEX_URL}?search={quote(query)}&per_page={min(limit, 200)}"
-                f"&page={page + 1}&select=id,title,authorships,publication_year,doi,"
-                "cited_by_count,host_venue,abstract_inverted_index"
-            )
-
-            data = await fetch_with_retry(client, url)
-
-            if not data or "results" not in data:
-                return []
-
-            papers = []
-            for item in data["results"]:
-                authors = []
-                if "authorships" in item:
-                    authors = [
-                        a.get("author", {}).get("display_name", "Unknown")
-                        for a in item["authorships"][:10]
-                    ]
-
-                year = None
-                if "publication_year" in item:
-                    year = item["publication_year"]
-                elif "publication_date" in item:
-                    try:
-                        year = int(item["publication_date"][:4])
-                    except (ValueError, TypeError):
-                        pass
-
-                citation_count = item.get("cited_by_count")
-
-                doi = ""
-                if "doi" in item and item["doi"]:
-                    doi = item["doi"].replace("https://doi.org/", "")
-
-                papers.append({
-                    "title": item.get("title", "Untitled") or "Untitled",
-                    "authors": authors,
-                    "year": year,
-                    "abstract": decode_inverted_index(item.get("abstract_inverted_index")),
-                    "source_url": item.get("doi", item.get("id", "")),
-                    "citation_count": citation_count,
-                    "external_id": doi,
-                    "source": "openalex",
-                    "venue": item.get("host_venue", {}).get("display_name", "")
-                    if isinstance(item.get("host_venue"), dict)
-                    else "",
-                })
-            return papers
-    except Exception as e:
-        logger.error(f"OpenAlex error: {e}")
-        return []
+    papers = compute_semantic_similarity(query, papers)
+    max_citations = max((p.get("citation_count") or 0) for p in papers)
+    years = [p["year"] for p in papers if p.get("year")]
+    current_year = datetime.now(UTC).year
+    min_year, max_year = (min(years), max(years)) if years else (current_year - 10, current_year)
+    for paper in papers:
+        paper["relevance_score"] = compute_relevance_score(
+            paper, query, max_citations, min_year, max_year
+        )
+    papers.sort(key=lambda p: p["relevance_score"], reverse=True)
+    return papers[:return_top]
 
 
 async def run(
-    query: str, page: int = 0, limit: int = DEFAULT_LIMIT, return_top: int = 20
-) -> list[dict]:
-    logger.info(f"Discovery: query='{query}', page={page}, limit={limit}, return_top={return_top}")
-
-    tasks = [
-        query_semantic_scholar(query, page, limit),
-        query_arxiv(query, page, limit),
-        query_openalex(query, page, limit),
-    ]
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-
-    all_papers = []
-    source_names = ["semantic_scholar", "arxiv", "openalex"]
-    failed_sources = []
-    successful_sources = []
-
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.warning(f"{source_names[i]} failed: {result} - continuing with other sources")
-            failed_sources.append(source_names[i])
-        else:
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug(f"{source_names[i]}: {len(result) if result else 0} papers")
-            successful_sources.append(source_names[i])
-            if result and len(result) > 0:
-                all_papers.extend(result)
-
-    if failed_sources:
-        logger.warning(f"Falling back to {len(successful_sources)} sources: {successful_sources}")
-
-    if not all_papers:
-        logger.error("All discovery sources failed - no papers available")
+    query: str,
+    page: int = 0,
+    limit: int | None = None,
+    return_top: int | None = None,
+) -> list[dict[str, Any]]:
+    s = get_settings()
+    return_top = return_top or s.discovery_return_top
+    papers, stats = await fetch_all_sources(query, page, limit)
+    logger.info("Discovery '%s' page=%d source counts: %s", query, page, stats)
+    if not papers:
+        logger.error("All discovery sources returned nothing for '%s'", query)
         return []
-
-    all_papers = compute_semantic_similarity(query, all_papers)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"Computed semantic scores for {len(all_papers)} papers")
-
-    all_papers = deduplicate_papers(all_papers)
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug(f"After dedup: {len(all_papers)} papers")
-
-    citations = [p.get("citation_count") or 0 for p in all_papers]
-    years = [p.get("year") or 2000 for p in all_papers if p.get("year")]
-
-    min_citations = min(citations) if citations else 0
-    max_citations = max(citations) if citations else 1
-    min_year = min(years) if years else 1990
-    max_year = max(years) if years else datetime.now().year
-
-    for paper in all_papers:
-        paper["relevance_score"] = compute_relevance_score(
-            paper, query, min_citations, max_citations, min_year, max_year
-        )
-
-    all_papers.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
-
-    top_papers = all_papers[:return_top]
-
-    if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(
-                f"Final: {len(top_papers)} papers (from {len(all_papers)} ranked)"
-                f" from {successful_sources} (failed: {failed_sources})"
-            )
-    return top_papers
-
-
-if __name__ == "__main__":
-    async def test():
-        results = await run("machine learning", 0, 10)
-        print(f"\nFound {len(results)} papers:")
-        for p in results[:5]:
-            print(
-                f"- {p['title'][:60]}... ({p['source']}, cites={p.get('citation_count')},"
-                f" score={p.get('relevance_score', 0):.3f})"
-            )
-
-    asyncio.run(test())
+    return await asyncio.to_thread(rank_papers, query, papers, return_top)

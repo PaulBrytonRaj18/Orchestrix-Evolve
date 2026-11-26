@@ -1,5 +1,6 @@
 import re
 from collections import Counter
+from datetime import UTC, datetime
 
 from constants import STOPWORDS
 
@@ -61,9 +62,7 @@ async def run(papers: list[dict]) -> dict:
         for author in authors:
             if author and author != "Unknown":
                 author_counter[author] += 1
-    top_authors = [
-        {"name": name, "count": count} for name, count in author_counter.most_common(15)
-    ]
+    top_authors = [{"name": name, "count": count} for name, count in author_counter.most_common(15)]
 
     keyword_frequency = compute_keyword_frequency(papers, 40)
 
@@ -89,15 +88,16 @@ async def run(papers: list[dict]) -> dict:
             citation_buckets["201-1000"] += 1
         else:
             citation_buckets["1000+"] += 1
-    citation_distribution = [
-        {"bucket": k, "count": v} for k, v in citation_buckets.items()
-    ]
+    citation_distribution = [{"bucket": k, "count": v} for k, v in citation_buckets.items()]
 
+    # "Recent" = the last three calendar years, relative to today rather than a
+    # hard-coded year that silently goes stale.
+    recent_cutoff = datetime.now(UTC).year - 2
     recent_papers = []
     historical_papers = []
     for paper in papers:
-        year = paper.get("year", 2000) or 2000
-        if year >= 2020:
+        year = paper.get("year") or 0
+        if year >= recent_cutoff:
             recent_papers.append(paper)
         else:
             historical_papers.append(paper)

@@ -125,17 +125,13 @@ class TestDetectMethodologyContradiction:
     def test_methodology_mismatch(self):
         analysis_keywords = ["machine", "learning", "neural", "network"]
         methodology = "Statistical analysis of survey data"
-        is_contradict, reason = detect_methodology_contradiction(
-            analysis_keywords, methodology
-        )
+        is_contradict, reason = detect_methodology_contradiction(analysis_keywords, methodology)
         assert is_contradict
 
     def test_methodology_matches(self):
         analysis_keywords = ["machine", "learning", "neural"]
         methodology = "Using machine learning neural networks"
-        is_contradict, reason = detect_methodology_contradiction(
-            analysis_keywords, methodology
-        )
+        is_contradict, reason = detect_methodology_contradiction(analysis_keywords, methodology)
         assert not is_contradict
 
     def test_empty_methodology(self):
@@ -150,17 +146,13 @@ class TestDetectTemporalContradiction:
             "abstract_compression": "Traditional approaches",
             "limitations": "Legacy methods",
         }
-        is_contradict, reason = detect_temporal_contradiction(
-            analysis_data, summarization
-        )
+        is_contradict, reason = detect_temporal_contradiction(analysis_data, summarization)
         assert isinstance(is_contradict, bool)
 
     def test_no_conflict(self):
         analysis_data = {"emerging_topics": []}
         summarization = {"abstract_compression": "Current methods", "limitations": ""}
-        is_contradict, reason = detect_temporal_contradiction(
-            analysis_data, summarization
-        )
+        is_contradict, reason = detect_temporal_contradiction(analysis_data, summarization)
         assert not is_contradict
 
 
@@ -197,20 +189,14 @@ class TestDetectAuthorDominanceContradiction:
                 {"name": "Author E"},
             ]
         }
-        papers = [
-            {"authors": ["Other"], "summary": {"key_contributions": "No mention"}}
-        ]
-        is_contradict, reason = detect_author_dominance_contradiction(
-            analysis_data, papers
-        )
+        papers = [{"authors": ["Other"], "summary": {"key_contributions": "No mention"}}]
+        is_contradict, reason = detect_author_dominance_contradiction(analysis_data, papers)
         assert isinstance(is_contradict, bool)
 
     def test_no_data(self):
         analysis_data = {}
         papers = []
-        is_contradict, reason = detect_author_dominance_contradiction(
-            analysis_data, papers
-        )
+        is_contradict, reason = detect_author_dominance_contradiction(analysis_data, papers)
         assert not is_contradict
 
 
@@ -231,9 +217,7 @@ class TestDetectKeywordMismatch:
         assert isinstance(is_contradict, bool)
 
     def test_keywords_match(self):
-        analysis_data = {
-            "keyword_frequency": [{"word": "machine"}, {"word": "learning"}]
-        }
+        analysis_data = {"keyword_frequency": [{"word": "machine"}, {"word": "learning"}]}
         papers = [{"summary": {"key_contributions": "Machine learning approach"}}]
         is_contradict, reason = detect_keyword_mismatch(analysis_data, papers)
         assert not is_contradict

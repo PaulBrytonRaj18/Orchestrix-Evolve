@@ -1,18 +1,16 @@
 from logging.config import fileConfig
 
-from dotenv import load_dotenv
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 from database import DATABASE_URL
 from models import Base
 
-load_dotenv()
-
 config = context.config
 
 if DATABASE_URL:
-    config.set_main_option("sqlalchemy.url", DATABASE_URL)
+    # configparser treats "%" as interpolation; URL-encoded passwords need escaping.
+    config.set_main_option("sqlalchemy.url", DATABASE_URL.replace("%", "%%"))
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)

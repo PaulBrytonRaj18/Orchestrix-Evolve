@@ -120,7 +120,7 @@ function Search() {
         try {
           const roadmapData = await api.getRoadmap(currentSessionId)
           setRoadmap(roadmapData)
-        } catch (error) {
+        } catch {
           console.log('No roadmap found or error fetching roadmap')
         }
       }

@@ -1,27 +1,33 @@
 [project]
 name = "orchestrix-backend"
-version = "2.0.0"
+version = "2.1.0"
 description = "AI-powered research intelligence platform backend"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-v --cov=./ --cov-report=term --cov-report=html --ignore=venv --ignore=.venv"
-filterwarnings = [
-    "ignore::DeprecationWarning:supabase",
-    "ignore::PendingDeprecationWarning",
-]
+asyncio_default_fixture_loop_scope = "function"
+addopts = "-q --strict-markers"
+markers = ["live: hits real external APIs (opt in with RUN_LIVE=1)"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.*", "ignore:Using `httpx` with `starlette.testclient`"]
 
 [tool.coverage.run]
-omit = ["tests/*", "venv/*", ".venv/*"]
+source = ["."]
+omit = ["tests/*", "alembic/*", "migrate_to_supabase.py"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
+extend-exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "N", "UP"]
+select = ["E", "F", "W", "I", "N", "UP", "B", "ASYNC", "SIM"]
+# Layout is enforced by `ruff format`; long string literals are not worth wrapping.
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["agents", "auth", "config", "constants", "database", "llm", "main", "models", "orchestrator", "rate_limit", "routers", "scheduler", "schemas", "services"]
 
 [tool.ruff.format]
 quote-style = "double"

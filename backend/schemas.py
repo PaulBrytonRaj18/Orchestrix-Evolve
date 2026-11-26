@@ -1,8 +1,22 @@
+"""Pydantic request/response models (Pydantic v2 idioms)."""
+
+from __future__ import annotations
+
 import re
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal
 
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
+
+_SPECIAL_CHARS = re.compile(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\;'/`~]")
+_DANGEROUS_PATTERNS = ("<script", "javascript:", "onerror=", "onclick=")
+
+
+class ORMModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ─── Auth ────────────────────────────────────────────────────────────────────
 
 
 class UserBase(BaseModel):
@@ -11,7 +25,7 @@ class UserBase(BaseModel):
 
 
 class UserCreate(UserBase):
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=8, max_length=128)
     confirm_password: str
 
     @field_validator("password")
@@ -23,9 +37,15 @@ class UserCreate(UserBase):
             raise ValueError("Password must contain at least one lowercase letter")
         if not re.search(r"\d", v):
             raise ValueError("Password must contain at least one digit")
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>_\-+=\[\]\\;'/`~]", v):
+        if not _SPECIAL_CHARS.search(v):
             raise ValueError("Password must contain at least one special character")
         return v
+
+    @model_validator(mode="after")
+    def passwords_match(self) -> UserCreate:
+        if self.password != self.confirm_password:
+            raise ValueError("Passwords do not match")
+        return self
 
 
 class UserLogin(BaseModel):
@@ -33,7 +53,7 @@ class UserLogin(BaseModel):
     password: str
 
 
-class UserResponse(BaseModel):
+class UserResponse(ORMModel):
     id: str
     email: str
     username: str
@@ -41,21 +61,27 @@ class UserResponse(BaseModel):
     is_admin: bool
     created_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 class UserUpdate(BaseModel):
     email: EmailStr | None = None
     username: str | None = Field(None, min_length=3, max_length=50)
-    password: str | None = Field(None, min_length=8)
+    password: str | None = Field(None, min_length=8, max_length=128)
 
 
 class TokenResponse(BaseModel):
-    access_token: str
+    access_token: str | None = None
     refresh_token: str | None = None
     token_type: str = "bearer"
     user: UserResponse
+    # True when Supabase requires e-mail confirmation before a session is issued.
+    email_confirmation_required: bool = False
+
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=1)
+
+
+# ─── Sessions & papers ───────────────────────────────────────────────────────
 
 
 class SessionCreate(BaseModel):
@@ -65,16 +91,16 @@ class SessionCreate(BaseModel):
     @field_validator("query", "name")
     @classmethod
     def sanitize_input(cls, v: str) -> str:
-        if v and len(v) > 0:
-            dangerous_patterns = ["<script", "javascript:", "onerror=", "onclick="]
-            v_lower = v.lower()
-            for pattern in dangerous_patterns:
-                if pattern in v_lower:
-                    raise ValueError("Invalid input detected")
-        return v.strip()
+        lowered = v.lower()
+        if any(p in lowered for p in _DANGEROUS_PATTERNS):
+            raise ValueError("Invalid input detected")
+        v = v.strip()
+        if not v:
+            raise ValueError("Value must not be blank")
+        return v
 
 
-class SessionResponse(BaseModel):
+class SessionResponse(ORMModel):
     id: str
     user_id: str | None = None
     name: str
@@ -82,9 +108,6 @@ class SessionResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     paper_count: int | None = 0
-
-    class Config:
-        from_attributes = True
 
 
 class PaperBase(BaseModel):
@@ -99,41 +122,13 @@ class PaperBase(BaseModel):
     source: str = Field(..., max_length=100)
 
 
-class PaperResponse(PaperBase):
+class PaperResponse(PaperBase, ORMModel):
     id: str
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
 
-
-class PaperWithDetails(PaperBase):
-    id: str
-    session_id: str
-    created_at: datetime
-    updated_at: datetime
-    summary: Optional["SummaryResponse"] = None
-    citation: Optional["CitationResponse"] = None
-    notes: list["NoteResponse"] = []
-
-    class Config:
-        from_attributes = True
-
-
-class AnalysisResponse(BaseModel):
-    id: str
-    session_id: str
-    analysis_type: str
-    data_json: Any
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class SummaryResponse(BaseModel):
+class SummaryResponse(ORMModel):
     id: str
     paper_id: str
     abstract_compression: str | None = None
@@ -143,11 +138,54 @@ class SummaryResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+
+class CitationResponse(ORMModel):
+    id: str
+    paper_id: str
+    apa: str | None = Field(None, max_length=4000)
+    mla: str | None = Field(None, max_length=4000)
+    ieee: str | None = Field(None, max_length=4000)
+    chicago: str | None = Field(None, max_length=4000)
+    created_at: datetime
+    updated_at: datetime
 
 
-class SynthesisResponse(BaseModel):
+class NoteCreate(BaseModel):
+    content: str = Field(..., max_length=10000)
+
+
+class NoteResponse(ORMModel):
+    id: str
+    paper_id: str
+    content: str = Field(..., max_length=10000)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaperWithDetails(PaperBase, ORMModel):
+    id: str
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
+    summary: SummaryResponse | None = None
+    citation: CitationResponse | None = None
+    notes: list[NoteResponse] = Field(default_factory=list)
+
+
+class AnalysisResponse(ORMModel):
+    id: str
+    session_id: str
+    analysis_type: str
+    data_json: Any
+    created_at: datetime
+    updated_at: datetime
+
+
+class SynthesizeRequest(BaseModel):
+    paper_ids: list[str] = Field(..., min_length=1, max_length=50)
+
+
+class SynthesisResponse(ORMModel):
     id: str
     session_id: str
     paper_ids: list[str] = Field(default_factory=list, max_length=100)
@@ -155,53 +193,18 @@ class SynthesisResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
-
     @field_validator("paper_ids", mode="before")
     @classmethod
-    def sanitize_paper_ids(cls, v):
-        if v is None:
-            return []
+    def sanitize_paper_ids(cls, v: Any) -> list[str]:
         if isinstance(v, list):
             return [str(x).strip() for x in v if str(x).strip()]
         return []
 
 
-class CitationResponse(BaseModel):
-    id: str
-    paper_id: str
-    apa: str | None = Field(None, max_length=2000)
-    mla: str | None = Field(None, max_length=2000)
-    ieee: str | None = Field(None, max_length=2000)
-    chicago: str | None = Field(None, max_length=2000)
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
+# ─── Conflicts ───────────────────────────────────────────────────────────────
 
 
-class NoteCreate(BaseModel):
-    content: str = Field(..., min_length=0, max_length=10000)
-
-
-class NoteResponse(BaseModel):
-    id: str
-    paper_id: str
-    content: str = Field(..., max_length=10000)
-    created_at: datetime
-    updated_at: datetime
-
-    class Config:
-        from_attributes = True
-
-
-class RefreshTokenRequest(BaseModel):
-    refresh_token: str = Field(..., min_length=1)
-
-
-class ConflictResponse(BaseModel):
+class ConflictResponse(ORMModel):
     id: str
     session_id: str
     conflict_type: str
@@ -215,24 +218,28 @@ class ConflictResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 class ConflictResolve(BaseModel):
     resolution_notes: str = Field(..., min_length=1, max_length=5000)
 
 
+class ConflictDetectionResult(BaseModel):
+    conflicts: list[ConflictResponse]
+    summary: str
+    stats: dict[str, int] = Field(default_factory=dict)
+
+
+# ─── Digests ─────────────────────────────────────────────────────────────────
+
+
 class ScheduledDigestCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     query: str = Field(..., min_length=1, max_length=1000)
-    frequency: str = Field(
-        default="weekly", pattern="^(daily|weekly|biweekly|monthly)$"
-    )
+    frequency: Literal["daily", "weekly", "biweekly", "monthly"] = "weekly"
     notify_email: EmailStr | None = None
 
 
-class ScheduledDigestResponse(BaseModel):
+class ScheduledDigestResponse(ORMModel):
     id: str
     name: str
     query: str
@@ -244,11 +251,8 @@ class ScheduledDigestResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
 
-
-class DigestRunResponse(BaseModel):
+class DigestRunResponse(ORMModel):
     id: str
     scheduled_digest_id: str
     session_id: str | None = None
@@ -260,46 +264,12 @@ class DigestRunResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
-
 
 class ScheduledDigestWithRuns(ScheduledDigestResponse):
-    runs: list[DigestRunResponse] = []
+    runs: list[DigestRunResponse] = Field(default_factory=list)
 
 
-class SessionFullResponse(BaseModel):
-    id: str
-    user_id: str | None = None
-    name: str
-    query: str
-    created_at: datetime
-    updated_at: datetime
-    papers: list[PaperWithDetails]
-    analyses: list[AnalysisResponse]
-    syntheses: list[SynthesisResponse]
-    conflicts: list[ConflictResponse] = []
-
-
-class OrchestrateResponse(BaseModel):
-    papers: list[PaperWithDetails]
-    analysis: dict | None
-    citations: list[dict]
-    summaries: list[dict]
-    trace: list[dict]
-    conflicts: list[dict] = []
-
-
-class HealthResponse(BaseModel):
-    status: str
-    version: str | None = None
-    database: str | None = None
-    uptime_seconds: float | None = None
-
-
-class ConflictDetectionResult(BaseModel):
-    conflicts: list[dict]
-    summary: str
+# ─── Roadmap ─────────────────────────────────────────────────────────────────
 
 
 class FoundationalPaper(BaseModel):
@@ -307,14 +277,14 @@ class FoundationalPaper(BaseModel):
     title: str
     reason: str
     citation_count: int
-    year: int
+    year: int | None = None
     priority: int
 
 
 class GapArea(BaseModel):
     question: str
     evidence: str
-    related_papers: list[str] = []
+    related_papers: list[str] = Field(default_factory=list)
     severity: str
 
 
@@ -331,4 +301,60 @@ class RoadmapResponse(BaseModel):
     next_query_suggestions: list[NextQuery]
 
 
-PaperWithDetails.model_rebuild()
+class RoadmapQueryRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=1000)
+
+
+# ─── Orchestration / session views ───────────────────────────────────────────
+
+
+class SessionFullResponse(BaseModel):
+    id: str
+    user_id: str | None = None
+    name: str
+    query: str
+    created_at: datetime
+    updated_at: datetime
+    papers: list[PaperWithDetails]
+    analyses: list[AnalysisResponse]
+    syntheses: list[SynthesisResponse]
+    conflicts: list[ConflictResponse] = Field(default_factory=list)
+
+
+class TraceEntry(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    agent: str
+    status: Literal["running", "done", "skipped", "error"]
+    timestamp: str
+    duration_ms: int | None = None
+    result: str | None = None
+    reason: str | None = None
+    error: str | None = None
+
+
+class OrchestrateResponse(BaseModel):
+    """Everything the UI needs after a run, read back from the database so every
+    paper / summary / citation carries its real, persisted id."""
+
+    papers: list[PaperWithDetails]
+    analysis: dict[str, Any] | None
+    citations: list[dict[str, Any]]
+    summaries: list[SummaryResponse]
+    trace: list[TraceEntry]
+    conflicts: list[ConflictResponse] = Field(default_factory=list)
+    conflict_summary: str | None = None
+    roadmap: RoadmapResponse | None = None
+
+
+class RoadmapQueryResponse(BaseModel):
+    triggered_query: str
+    orchestration_result: OrchestrateResponse
+
+
+class HealthResponse(BaseModel):
+    status: str
+    version: str | None = None
+    database: str | None = None
+    uptime_seconds: float | None = None
+    llm_enabled: bool | None = None

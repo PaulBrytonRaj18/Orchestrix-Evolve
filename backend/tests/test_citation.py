@@ -19,14 +19,21 @@ class TestFormatAuthorsAPA:
     def test_single_author(self):
         authors = ["John Smith"]
         result = format_authors_apa(authors)
-        assert result == "John Smith"
+        assert result == "Smith, J."
 
     def test_multiple_authors(self):
         authors = ["John Smith", "Jane Doe", "Bob Wilson"]
         result = format_authors_apa(authors)
-        assert "John Smith" in result
-        assert "Jane Doe" in result
-        assert "Bob Wilson" in result
+        assert result == "Smith, J., Doe, J., & Wilson, B."
+
+    def test_hyphenated_and_inverted_names(self):
+        assert format_authors_apa(["Jean-Paul Sartre"]) == "Sartre, J.-P."
+        assert format_authors_apa(["Doe, Jane Ann"]) == "Doe, J. A."
+
+    def test_more_than_twenty_authors(self):
+        authors = [f"First{i} Last{i}" for i in range(25)]
+        result = format_authors_apa(authors)
+        assert ". . . Last24, F." in result and "Last20" not in result
 
     def test_empty_authors(self):
         result = format_authors_apa([])
@@ -41,12 +48,11 @@ class TestFormatAuthorsMLA:
     def test_single_author(self):
         authors = ["John Smith"]
         result = format_authors_mla(authors)
-        assert result == "John Smith"
+        assert result == "Smith, John"
 
     def test_multiple_authors(self):
-        authors = ["John Smith", "Jane Doe"]
-        result = format_authors_mla(authors)
-        assert result == "John Smith et al."
+        assert format_authors_mla(["John Smith", "Jane Doe"]) == "Smith, John, and Jane Doe"
+        assert format_authors_mla(["John Smith", "Jane Doe", "B W"]) == "Smith, John, et al."
 
     def test_empty_authors(self):
         result = format_authors_mla([])
@@ -57,26 +63,22 @@ class TestFormatAuthorsIEEE:
     def test_single_author(self):
         authors = ["John Smith"]
         result = format_authors_ieee(authors)
-        assert result == "John Smith"
+        assert result == "J. Smith"
 
     def test_multiple_authors(self):
-        authors = ["John Smith", "Jane Doe"]
-        result = format_authors_ieee(authors)
-        assert "John Smith" in result
-        assert "Jane Doe" in result
+        assert format_authors_ieee(["John Smith", "Jane Doe"]) == "J. Smith and J. Doe"
+        assert format_authors_ieee([f"A B{i}" for i in range(7)]) == "A. B0 et al."
 
 
 class TestFormatAuthorsChicago:
     def test_single_author(self):
         authors = ["John Smith"]
         result = format_authors_chicago(authors)
-        assert result == "John Smith"
+        assert result == "Smith, John"
 
     def test_multiple_authors(self):
-        authors = ["John Smith", "Jane Doe"]
-        result = format_authors_chicago(authors)
-        assert "John Smith" in result
-        assert "Jane Doe" in result
+        result = format_authors_chicago(["John Smith", "Jane Doe", "Bob Wilson"])
+        assert result == "Smith, John, Jane Doe, and Bob Wilson"
 
 
 class TestGenerateCitation:
@@ -94,9 +96,21 @@ class TestGenerateCitation:
         assert "ieee" in result
         assert "chicago" in result
 
-        assert "John Smith" in result["apa"]
-        assert "Deep Learning Research" in result["apa"]
-        assert "2024" in result["apa"]
+        assert result["apa"] == (
+            "Smith, J., & Doe, J. (2024). Deep Learning Research. https://example.com/paper"
+        )
+        assert result["ieee"].startswith('J. Smith and J. Doe, "Deep Learning Research,"')
+
+    def test_missing_year_renders_nd_not_none(self):
+        result = generate_citation({"title": "T", "authors": ["A B"], "year": None})
+        assert "None" not in "".join(result.values())
+        assert "(n.d.)" in result["apa"]
+
+    def test_doi_preferred_over_url(self):
+        result = generate_citation(
+            {"title": "T", "authors": ["A B"], "doi": "10.1/x", "source_url": "https://x"}
+        )
+        assert "https://doi.org/10.1/x" in result["apa"]
 
     def test_missing_year(self):
         paper = {

@@ -206,9 +206,7 @@ def detect_semantic_contradiction(text1: str, text2: str) -> tuple[bool, str]:
     return False, ""
 
 
-def detect_scale_contradiction(
-    analysis_data: dict, summarization: dict
-) -> tuple[bool, str]:
+def detect_scale_contradiction(analysis_data: dict, summarization: dict) -> tuple[bool, str]:
     analysis_keywords = extract_keywords(str(analysis_data))
     summary_keywords = extract_keywords(summarization.get("abstract_compression", ""))
 
@@ -259,9 +257,7 @@ def detect_methodology_contradiction(
     return False, ""
 
 
-def detect_temporal_contradiction(
-    analysis_data: dict, summarization: dict
-) -> tuple[bool, str]:
+def detect_temporal_contradiction(analysis_data: dict, summarization: dict) -> tuple[bool, str]:
     emerging = analysis_data.get("emerging_topics", [])
     recent_keywords = set()
 
@@ -270,9 +266,7 @@ def detect_temporal_contradiction(
             recent_keywords.add(topic.get("word", ""))
 
     summary_text = normalize_text(
-        summarization.get("abstract_compression", "")
-        + " "
-        + summarization.get("limitations", "")
+        summarization.get("abstract_compression", "") + " " + summarization.get("limitations", "")
     )
 
     historical_indicators = {
@@ -294,9 +288,7 @@ def detect_temporal_contradiction(
     return False, ""
 
 
-def detect_citation_contradiction(
-    analysis_data: dict, papers: list[dict]
-) -> tuple[bool, str]:
+def detect_citation_contradiction(analysis_data: dict, papers: list[dict]) -> tuple[bool, str]:
     citation_dist = analysis_data.get("citation_distribution", [])
 
     total_papers = sum(b.get("count", 0) for b in citation_dist)
@@ -313,11 +305,15 @@ def detect_citation_contradiction(
     low_cited_summaries = 0
     for paper in papers:
         summary = paper.get("summary", {})
-        if summary and summary.get("limitations"):
-            if "limited" in normalize_text(
-                summary.get("limitations", "")
-            ) or "small" in normalize_text(summary.get("limitations", "")):
-                low_cited_summaries += 1
+        if (
+            summary
+            and summary.get("limitations")
+            and (
+                "limited" in normalize_text(summary.get("limitations", ""))
+                or "small" in normalize_text(summary.get("limitations", ""))
+            )
+        ):
+            low_cited_summaries += 1
 
     if highly_cited_ratio > 0.3 and low_cited_summaries > len(papers) * 0.3:
         return (
@@ -344,9 +340,7 @@ def detect_author_dominance_contradiction(
         for author in paper.get("authors", []):
             diverse_authors.add(author.lower())
 
-    top_3_diversity_ratio = (
-        len(top_3_authors) / len(diverse_authors) if diverse_authors else 0
-    )
+    top_3_diversity_ratio = len(top_3_authors) / len(diverse_authors) if diverse_authors else 0
 
     summary_mentions = 0
     for paper in papers:
@@ -368,12 +362,9 @@ def detect_author_dominance_contradiction(
     return False, ""
 
 
-def detect_keyword_mismatch(
-    analysis_data: dict, papers: list[dict]
-) -> tuple[bool, str]:
+def detect_keyword_mismatch(analysis_data: dict, papers: list[dict]) -> tuple[bool, str]:
     analysis_keywords = set(
-        k.get("word", "").lower()
-        for k in analysis_data.get("keyword_frequency", [])[:20]
+        k.get("word", "").lower() for k in analysis_data.get("keyword_frequency", [])[:20]
     )
 
     summary_keywords = set()
@@ -392,8 +383,10 @@ def detect_keyword_mismatch(
         missing = analysis_keywords - overlap
         return (
             True,
-            (f"Keyword mismatch: analysis highlights {', '.join(list(missing)[:5])}"
-+              " but these aren't emphasized in summaries"),
+            (
+                f"Keyword mismatch: analysis highlights {', '.join(list(missing)[:5])}"
+                + " but these aren't emphasized in summaries"
+            ),
         )
 
     return False, ""
@@ -412,18 +405,28 @@ async def detect_conflicts(
     conflicts = []
 
     paper_summaries = {}
-    for paper, summary in zip(papers, summarizations):
-        if isinstance(summary, dict):
-            derived = summary.get("derived_content", {}) or {}
-            inferred = summary.get("inferred_content", {}) or {}
-            paper_summaries[paper.get("id", paper.get("title", ""))] = {
-                "abstract_compression": derived.get("abstract_compression", ""),
-                "limitations": inferred.get("limitations", ""),
-                "methodology": inferred.get("explanation_approach", ""),
-                "key_contributions": "\n".join(derived.get("key_points", []))
-                if isinstance(derived.get("key_points"), list)
-                else str(derived.get("key_points", "")),
-            }
+    known_ids = {p.get("id") for p in papers if p.get("id")}
+    for idx, summary in enumerate(summarizations):
+        if not isinstance(summary, dict):
+            continue
+        # Join on paper_id; fall back to position only for legacy, id-less input.
+        paper_id = summary.get("paper_id")
+        if paper_id not in known_ids:
+            if idx >= len(papers):
+                continue
+            paper_id = papers[idx].get("id") or papers[idx].get("title", "")
+        derived = summary.get("derived_content") or {}
+        inferred = summary.get("inferred_content") or {}
+        key_points = derived.get("key_points", summary.get("key_contributions", ""))
+        paper_summaries[paper_id] = {
+            "abstract_compression": summary.get("abstract_compression")
+            or derived.get("abstract_compression", ""),
+            "limitations": summary.get("limitations") or inferred.get("limitations", ""),
+            "methodology": summary.get("methodology") or inferred.get("explanation_approach", ""),
+            "key_contributions": "\n".join(map(str, key_points))
+            if isinstance(key_points, list)
+            else str(key_points or ""),
+        }
 
     analysis_keywords = []
     if analysis_data.get("keyword_frequency"):
@@ -455,9 +458,7 @@ async def detect_conflicts(
                 }
             )
 
-        is_contradict, reason = detect_methodology_contradiction(
-            analysis_keywords, methodology
-        )
+        is_contradict, reason = detect_methodology_contradiction(analysis_keywords, methodology)
         if is_contradict:
             conflicts.append(
                 {
@@ -525,9 +526,7 @@ async def detect_conflicts(
                 "analysis_insight": (
                     "Analysis keywords: "
                     + ", ".join(
-                        str(k.get("word", ""))
-                        if isinstance(k, dict)
-                        else str(k)
+                        str(k.get("word", "")) if isinstance(k, dict) else str(k)
                         for k in analysis_data.get("keyword_frequency", [])[:10]
                     )
                 ),

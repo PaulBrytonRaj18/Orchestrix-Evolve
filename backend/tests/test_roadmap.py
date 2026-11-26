@@ -18,21 +18,22 @@ from agents.roadmap import (
 
 
 class TestComputeWeightedScore:
-    def test_high_citation_paper(self):
-        paper = {"citation_count": 800, "year": 2018}
-        score = _compute_weighted_score(paper)
-        assert 0.8 <= score <= 1.0
+    def test_high_citation_paper_scores_high(self):
+        assert _compute_weighted_score({"citation_count": 5000, "year": 2017}) >= 0.8
 
-    def test_low_citation_recent_paper(self):
-        paper = {"citation_count": 50, "year": 2024}
-        score = _compute_weighted_score(paper)
-        assert 0.0 <= score <= 1.0
+    def test_more_citations_score_higher(self):
+        low = _compute_weighted_score({"citation_count": 50, "year": 2020})
+        high = _compute_weighted_score({"citation_count": 800, "year": 2020})
+        assert 0.0 <= low < high <= 1.0
 
-    def test_no_citations_old_paper(self):
-        paper = {"citation_count": 0, "year": 2010}
-        score = _compute_weighted_score(paper)
-        assert score >= 0.3
-        assert score <= 0.5
+    def test_citation_velocity_beats_age(self):
+        """Same citations, younger paper → faster-rising → more foundational now."""
+        old = _compute_weighted_score({"citation_count": 300, "year": 2005})
+        young = _compute_weighted_score({"citation_count": 300, "year": 2023})
+        assert young > old
+
+    def test_no_citations_scores_zero(self):
+        assert _compute_weighted_score({"citation_count": 0, "year": 2010}) == 0.0
 
     def test_missing_fields(self):
         paper = {}
@@ -41,15 +42,19 @@ class TestComputeWeightedScore:
 
 
 class TestIdentifyFoundationalPapers:
-    def test_filters_papers_before_2015(self):
+    def test_keeps_classic_papers(self):
+        """Foundational work is often old; the former hard 2015 cutoff dropped it."""
         papers = [
-            {"id": "1", "title": "Old Paper", "year": 2010, "citation_count": 500},
+            {"id": "1", "title": "Old Classic", "year": 2010, "citation_count": 5000},
             {"id": "2", "title": "Recent Paper", "year": 2020, "citation_count": 100},
         ]
-        analysis_data = {}
-        result = _identify_foundational_papers(papers, analysis_data)
-        assert len(result) <= 8
-        assert all(p["year"] >= 2015 for p in result)
+        result = _identify_foundational_papers(papers, {})
+        assert result[0]["title"] == "Old Classic"
+
+    def test_handles_missing_year(self):
+        papers = [{"id": "1", "title": "No year", "year": None, "citation_count": 3}]
+        result = _identify_foundational_papers(papers, {})
+        assert result[0]["year"] is None
 
     def test_ranks_by_weighted_score(self):
         papers = [
@@ -97,11 +102,13 @@ class TestIdentifyGapAreas:
         analysis_data = {"keyword_frequency": [], "emerging_topics": []}
         summaries = []
         notes = []
-        conflicts = [{
-            "severity": "high",
-            "title": "Methodology conflict",
-            "description": "Different methods used",
-        }]
+        conflicts = [
+            {
+                "severity": "high",
+                "title": "Methodology conflict",
+                "description": "Different methods used",
+            }
+        ]
         result = _identify_gap_areas(papers, analysis_data, summaries, notes, conflicts)
         assert any("Methodology conflict" in gap["question"] for gap in result)
 
@@ -109,9 +116,7 @@ class TestIdentifyGapAreas:
         papers = [{"id": "1", "title": "Test", "year": 2020}]
         analysis_data = {
             "keyword_frequency": [],
-            "emerging_topics": [
-                {"word": "transformer", "delta": 0.5}
-            ]
+            "emerging_topics": [{"word": "transformer", "delta": 0.5}],
         }
         summaries = []
         notes = []
@@ -131,17 +136,17 @@ class TestIdentifyGapAreas:
 
 class TestExtractKeywordsFromPapers:
     def test_extracts_title_keywords(self):
-        papers = [{
-            "title": "Deep Learning for Image Recognition",
-            "abstract": "This paper presents a new approach.",
-        }]
+        papers = [
+            {
+                "title": "Deep Learning for Image Recognition",
+                "abstract": "This paper presents a new approach.",
+            }
+        ]
         keywords = _extract_keywords_from_papers(papers)
         assert "learning" in keywords or "image" in keywords or "recognition" in keywords
 
     def test_filters_common_words(self):
-        papers = [
-            {"title": "The Quick Brown Fox Jumps", "abstract": "This is a test."}
-        ]
+        papers = [{"title": "The Quick Brown Fox Jumps", "abstract": "This is a test."}]
         keywords = _extract_keywords_from_papers(papers)
         assert "the" not in keywords
         assert "this" not in keywords
@@ -153,11 +158,9 @@ class TestGetSummaryText:
         summary = {
             "derived_content": {
                 "abstract_compression": "Test compression",
-                "key_points": ["point1", "point2"]
+                "key_points": ["point1", "point2"],
             },
-            "inferred_content": {
-                "limitations": "Test limitations"
-            }
+            "inferred_content": {"limitations": "Test limitations"},
         }
         text = _get_summary_text(summary)
         assert "Test compression" in text
@@ -166,7 +169,7 @@ class TestGetSummaryText:
     def test_handles_flat_format(self):
         summary = {
             "abstract_compression": "Flat format compression",
-            "limitations": "Flat format limitations"
+            "limitations": "Flat format limitations",
         }
         text = _get_summary_text(summary)
         assert "Flat format compression" in text
@@ -185,7 +188,7 @@ class TestGenerateNextQueries:
         analysis_data = {
             "emerging_topics": [{"word": "transformer", "delta": 0.5}],
             "keyword_frequency": [],
-            "top_authors": []
+            "top_authors": [],
         }
         gaps = []
         result = _generate_next_queries(papers, analysis_data, gaps)
@@ -203,13 +206,9 @@ class TestGenerateNextQueries:
     def test_limits_to_5_queries(self):
         papers = [{"title": "Test", "abstract": "Test abstract"}]
         analysis_data = {
-            "emerging_topics": [
-                {"word": f"topic{i}", "delta": 0.5} for i in range(5)
-            ],
-            "keyword_frequency": [
-                {"word": f"keyword{i}"} for i in range(20)
-            ],
-            "top_authors": [{"name": "Test Author"}]
+            "emerging_topics": [{"word": f"topic{i}", "delta": 0.5} for i in range(5)],
+            "keyword_frequency": [{"word": f"keyword{i}"} for i in range(20)],
+            "top_authors": [{"name": "Test Author"}],
         }
         gaps = [{"question": f"Gap question {i}?"} for i in range(5)]
         result = _generate_next_queries(papers, analysis_data, gaps)
@@ -228,12 +227,18 @@ class TestRunFunction:
     def test_returns_valid_structure(self):
         papers = [
             {
-                "id": "1", "title": "Test Paper 1", "year": 2020,
-                "citation_count": 100, "abstract": "Test abstract 1",
+                "id": "1",
+                "title": "Test Paper 1",
+                "year": 2020,
+                "citation_count": 100,
+                "abstract": "Test abstract 1",
             },
             {
-                "id": "2", "title": "Test Paper 2", "year": 2021,
-                "citation_count": 200, "abstract": "Test abstract 2",
+                "id": "2",
+                "title": "Test Paper 2",
+                "year": 2021,
+                "citation_count": 200,
+                "abstract": "Test abstract 2",
             },
         ]
         analysis_data = {
@@ -241,11 +246,9 @@ class TestRunFunction:
             "top_authors": [],
             "keyword_frequency": [],
             "citation_distribution": [],
-            "emerging_topics": []
+            "emerging_topics": [],
         }
-        summaries = [
-            {"abstract_compression": "Summary 1", "key_contributions": "Contributions 1"}
-        ]
+        summaries = [{"abstract_compression": "Summary 1", "key_contributions": "Contributions 1"}]
         notes = []
         conflicts = []
 

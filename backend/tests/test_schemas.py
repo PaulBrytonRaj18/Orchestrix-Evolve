@@ -3,6 +3,7 @@ import sys
 from datetime import datetime
 
 import pytest
+from pydantic import ValidationError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -43,15 +44,23 @@ class TestUserSchemas:
         assert user.email == "test@example.com"
         assert user.username == "testuser"
 
-    def test_user_create_stores_passwords(self):
+    def test_user_create_stores_matching_passwords(self):
         user = UserCreate(
             email="test@example.com",
             username="testuser",
             password="SecurePass123!",
-            confirm_password="password2",
+            confirm_password="SecurePass123!",
         )
-        assert user.password == "SecurePass123!"
-        assert user.confirm_password == "password2"
+        assert user.password == user.confirm_password == "SecurePass123!"
+
+    def test_user_create_rejects_mismatched_passwords(self):
+        with pytest.raises(ValidationError, match="Passwords do not match"):
+            UserCreate(
+                email="test@example.com",
+                username="testuser",
+                password="SecurePass123!",
+                confirm_password="password2",
+            )
 
     def test_user_login_valid(self):
         login = UserLogin(email="user@example.com", password="mypassword")
@@ -249,19 +258,29 @@ class TestConflictSchemas:
         assert resolve.resolution_notes == "Resolved by manual review"
 
     def test_conflict_detection_result(self):
-        result = ConflictDetectionResult(
-            conflicts=[{"type": "contradiction", "severity": "medium"}],
-            summary="2 conflicts detected",
-        )
-        assert len(result.conflicts) == 1
+        now = datetime.now()
+        stored = {
+            "id": "c1",
+            "session_id": "s1",
+            "conflict_type": "keyword_mismatch",
+            "severity": "medium",
+            "title": "Mismatch",
+            "resolved": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        result = ConflictDetectionResult(conflicts=[stored], summary="1 conflict detected")
+        assert result.conflicts[0].id == "c1"
+
+    def test_conflict_detection_requires_persisted_conflicts(self):
+        with pytest.raises(ValidationError):
+            ConflictDetectionResult(conflicts=[{"severity": "medium"}], summary="x")
 
 
 class TestDigestSchemas:
     def test_digest_create_valid_frequencies(self):
         for freq in ["daily", "weekly", "biweekly", "monthly"]:
-            digest = ScheduledDigestCreate(
-                name="Test Digest", query="AI", frequency=freq
-            )
+            digest = ScheduledDigestCreate(name="Test Digest", query="AI", frequency=freq)
             assert digest.frequency == freq
 
     def test_digest_response(self):
@@ -328,13 +347,12 @@ class TestRoadmapSchemas:
         assert len(response.gap_areas) == 1
 
     def test_orchestrate_response(self):
-        datetime.now()
         response = OrchestrateResponse(
             papers=[],
             analysis={"publication_trend": []},
             citations=[],
             summaries=[],
-            trace=[{"agent": "test", "status": "done"}],
+            trace=[{"agent": "test", "status": "done", "timestamp": "2026-01-01T00:00:00Z"}],
             conflicts=[],
         )
         assert "publication_trend" in response.analysis

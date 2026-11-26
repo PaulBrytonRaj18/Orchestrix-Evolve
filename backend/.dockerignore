@@ -16,3 +16,8 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+htmlcov/
+.coverage
+coverage.xml
+.pytest_cache/
+.ruff_cache/
