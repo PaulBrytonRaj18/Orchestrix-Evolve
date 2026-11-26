@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { api } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { Map, FileText, RefreshCw, Search, ArrowRight } from 'lucide-react';
@@ -82,7 +82,7 @@ function RoadmapPanel({ roadmap, sessionId, onQueryClick, onRefresh }: RoadmapPa
             }}
           >
             {roadmap.foundational_papers.slice(0, 6).map((paper, idx) => (
-              <motion.div
+              <m.div
                 key={paper.paper_id || idx}
                 className="card card-hover"
                 initial={{ opacity: 0, y: 10 }}
@@ -141,7 +141,7 @@ function RoadmapPanel({ roadmap, sessionId, onQueryClick, onRefresh }: RoadmapPa
                     )}
                   </div>
                 </div>
-              </motion.div>
+              </m.div>
             ))}
           </div>
         </div>
@@ -211,7 +211,7 @@ function RoadmapPanel({ roadmap, sessionId, onQueryClick, onRefresh }: RoadmapPa
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
             {roadmap.next_query_suggestions.map((q, idx) => (
-              <motion.button
+              <m.button
                 key={idx}
                 className="card card-hover"
                 initial={{ opacity: 0, x: -10 }}
@@ -244,7 +244,7 @@ function RoadmapPanel({ roadmap, sessionId, onQueryClick, onRefresh }: RoadmapPa
                     {q.rationale}
                   </p>
                 )}
-              </motion.button>
+              </m.button>
             ))}
           </div>
         </div>

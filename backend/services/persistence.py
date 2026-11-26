@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from agents.discovery import normalize_text
@@ -61,6 +62,29 @@ def paper_counts(db: Session, session_ids: list[str]) -> dict[str, int]:
     return dict(rows.all())
 
 
+def _get_or_create(db: Session, model: type, where: dict[str, Any], **values: Any) -> Any:
+    """Race-safe upsert helper.
+
+    Looks the row up; if absent, inserts it inside a SAVEPOINT. When a concurrent
+    writer inserted the same unique key first, the unique index rejects ours, the
+    savepoint rolls back (the outer transaction survives) and the winner's row is used.
+    """
+    stmt = select(model).filter_by(**where)
+    row = db.scalar(stmt)
+    if row is not None:
+        return row
+    row = model(**where, **values)
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except IntegrityError:
+        row = db.scalar(stmt)
+        if row is None:
+            raise
+    return row
+
+
 def save_papers(db: Session, session_id: str, papers: list[dict[str, Any]]) -> dict[str, str]:
     """Insert new papers (+ citations); return ``{provisional_id: stored_id}``."""
     existing = db.execute(
@@ -94,19 +118,25 @@ def save_papers(db: Session, session_id: str, papers: list[dict[str, Any]]) -> d
         )
         if provisional:
             paper.id = provisional
-        db.add(paper)
-        db.flush()
+        try:
+            with db.begin_nested():
+                db.add(paper)
+                db.flush()
+        except IntegrityError:
+            # A concurrent run stored this work first (uq_papers_session_external).
+            winner = db.scalar(
+                select(Paper.id).where(Paper.session_id == session_id, Paper.external_id == ext)
+            )
+            if winner is None:
+                raise
+            if provisional:
+                id_map[provisional] = winner
+            continue
         cit = data.get("citation")
         if cit:
-            db.add(
-                Citation(
-                    paper_id=paper.id,
-                    apa=cit.get("apa"),
-                    mla=cit.get("mla"),
-                    ieee=cit.get("ieee"),
-                    chicago=cit.get("chicago"),
-                )
-            )
+            record = _get_or_create(db, Citation, {"paper_id": paper.id})
+            record.apa, record.mla = cit.get("apa"), cit.get("mla")
+            record.ieee, record.chicago = cit.get("ieee"), cit.get("chicago")
         if ext:
             by_ext[ext] = paper.id
         by_title[normalize_text(paper.title)] = paper.id
@@ -119,10 +149,7 @@ def save_summaries(db: Session, summaries: list[dict[str, Any]], id_map: dict[st
         paper_id = id_map.get(data.get("paper_id") or "")
         if not paper_id:
             continue
-        summary = db.scalar(select(Summary).where(Summary.paper_id == paper_id))
-        if summary is None:
-            summary = Summary(paper_id=paper_id)
-            db.add(summary)
+        summary = _get_or_create(db, Summary, {"paper_id": paper_id})
         summary.abstract_compression = data.get("abstract_compression") or None
         summary.key_contributions = data.get("key_contributions") or None
         summary.methodology = data.get("methodology") or None
@@ -137,10 +164,14 @@ def save_roadmap(
         {**fp, "paper_id": id_map.get(fp.get("paper_id"), fp.get("paper_id"))}
         for fp in roadmap.get("foundational_papers", [])
     ]
-    record = db.scalar(select(Roadmap).where(Roadmap.session_id == session_id))
-    if record is None:
-        record = Roadmap(session_id=session_id)
-        db.add(record)
+    record = _get_or_create(
+        db,
+        Roadmap,
+        {"session_id": session_id},
+        foundational_papers_json=[],
+        gap_areas_json=[],
+        next_queries_json=[],
+    )
     record.foundational_papers_json = foundational
     record.gap_areas_json = roadmap.get("gap_areas", [])
     record.next_queries_json = roadmap.get("next_query_suggestions", [])
@@ -151,17 +182,13 @@ def save_orchestration(db: Session, session_id: str, result: dict[str, Any]) -> 
     id_map = save_papers(db, session_id, result.get("papers") or [])
 
     if result.get("analysis"):
-        record = db.scalar(
-            select(Analysis).where(
-                Analysis.session_id == session_id, Analysis.analysis_type == "full"
-            )
+        record = _get_or_create(
+            db,
+            Analysis,
+            {"session_id": session_id, "analysis_type": "full"},
+            data_json=result["analysis"],
         )
-        if record is None:
-            db.add(
-                Analysis(session_id=session_id, analysis_type="full", data_json=result["analysis"])
-            )
-        else:
-            record.data_json = result["analysis"]
+        record.data_json = result["analysis"]
 
     save_summaries(db, result.get("summaries") or [], id_map)
 
@@ -244,7 +271,18 @@ def session_inputs(db: Session, session_id: str) -> dict[str, Any]:
 
 
 def build_orchestrate_response(db: Session, session_id: str, result: dict[str, Any]) -> dict:
+    """The session as the UI shows it after a run. Without an ``analysis`` key in
+    ``result`` (e.g. a finished job replayed later) the stored analysis is used."""
     papers = load_papers(db, session_id)
+    if "analysis" in result:
+        analysis = result["analysis"]
+    else:
+        stored = db.scalar(
+            select(Analysis)
+            .where(Analysis.session_id == session_id)
+            .order_by(Analysis.updated_at.desc())
+        )
+        analysis = stored.data_json if stored else None
     paper_models = [PaperWithDetails.model_validate(p) for p in papers]
     conflicts = db.scalars(
         select(Conflict).where(Conflict.session_id == session_id).order_by(Conflict.created_at)
@@ -252,7 +290,7 @@ def build_orchestrate_response(db: Session, session_id: str, result: dict[str, A
     roadmap = db.scalar(select(Roadmap).where(Roadmap.session_id == session_id))
     return {
         "papers": paper_models,
-        "analysis": result.get("analysis"),
+        "analysis": analysis,
         "citations": [
             {"paper_id": p.id, "title": p.title, "citation": p.citation.model_dump(mode="json")}
             for p in paper_models
@@ -292,3 +330,19 @@ __all__ = [
     "save_summaries",
     "session_inputs",
 ]
+
+
+def persist_and_view(session_id: str, user_id: str, result: dict[str, Any]) -> dict:
+    """Save one run for ``user_id``'s session and return the refreshed session view.
+
+    Runs in a worker thread with its own short transaction (never across agent work).
+    """
+    from database import get_db_context
+
+    with get_db_context() as db:
+        session = db.get(SessionModel, session_id)
+        if session is None or session.user_id != user_id:
+            raise LookupError("Session not found")
+        save_orchestration(db, session_id, result)
+        db.commit()
+        return build_orchestrate_response(db, session_id, result)

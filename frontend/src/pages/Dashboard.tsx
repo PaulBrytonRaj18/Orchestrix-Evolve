@@ -1,16 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence } from 'framer-motion'
 import { api } from '../api'
 import { useToast } from '../contexts/ToastContext'
 import SessionSidebar from '../components/SessionSidebar'
 import PaperCard from '../components/PaperCard'
-import AnalysisCharts from '../components/AnalysisCharts'
 import CitationPanel from '../components/CitationPanel'
 import SummaryPanel from '../components/SummaryPanel'
 import ConflictsPanel from '../components/ConflictsPanel'
 import { FileText, BarChart3, Link2, Sparkles, AlertTriangle, Plus, Clock, Loader2 } from 'lucide-react'
 import type { Session, SessionFull, AnalysisData } from '../types/api'
+
+// recharts (~100 kB gzipped) loads only when the Analysis tab is opened.
+const AnalysisCharts = lazy(() => import('../components/AnalysisCharts'))
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -165,7 +167,7 @@ function Dashboard() {
             <p style={{ color: 'var(--text-secondary)' }}>Loading session...</p>
           </div>
         ) : currentSession ? (
-          <motion.div
+          <m.div
             key={currentSession.id}
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
@@ -211,7 +213,7 @@ function Dashboard() {
 
             {/* Content */}
             <AnimatePresence mode="wait">
-              <motion.div
+              <m.div
                 key={activeTab}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -219,20 +221,20 @@ function Dashboard() {
                 transition={{ duration: 0.2 }}
               >
                 {activeTab === 'papers' && (
-                  <motion.div
+                  <m.div
                     variants={containerVariants}
                     initial="hidden"
                     animate="visible"
                     className="papers-grid"
                   >
                     {currentSession.papers.map((paper) => (
-                      <motion.div key={paper.id} variants={itemVariants}>
+                      <m.div key={paper.id} variants={itemVariants}>
                         <PaperCard
                           paper={paper}
                           showNotes={true}
                           onNoteChange={handleNoteChange}
                         />
-                      </motion.div>
+                      </m.div>
                     ))}
                     {currentSession.papers.length === 0 && (
                       <div className="empty-state">
@@ -245,15 +247,15 @@ function Dashboard() {
                         </p>
                       </div>
                     )}
-                  </motion.div>
+                  </m.div>
                 )}
-                {activeTab === 'analysis' && <AnalysisCharts analysis={analysisData} />}
+                {activeTab === 'analysis' && <Suspense fallback={<div className="loading-spinner" />}><AnalysisCharts analysis={analysisData} /></Suspense>}
                 {activeTab === 'citations' && <CitationPanel papers={currentSession.papers} />}
                 {activeTab === 'summary' && <SummaryPanel papers={currentSession.papers} onSynthesize={handleSynthesize} />}
                 {activeTab === 'conflicts' && currentSessionId && <ConflictsPanel sessionId={currentSessionId} />}
-              </motion.div>
+              </m.div>
             </AnimatePresence>
-          </motion.div>
+          </m.div>
         ) : (
           <div className="welcome-panel">
             <div className="empty-icon" style={{ marginBottom: 'var(--space-4)' }}>

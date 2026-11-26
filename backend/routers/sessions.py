@@ -71,11 +71,10 @@ def _read_session_query(session_id: str, user_id: str) -> str:
 
 
 def _persist_and_view(session_id: str, user_id: str, result: dict[str, Any]) -> dict:
-    with get_db_context() as db:
-        get_owned_session(db, session_id, user_id)
-        persistence.save_orchestration(db, session_id, result)
-        db.commit()
-        return persistence.build_orchestrate_response(db, session_id, result)
+    try:
+        return persistence.persist_and_view(session_id, user_id, result)
+    except LookupError as exc:  # session deleted while the agents were running
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Session not found") from exc
 
 
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9_-]")

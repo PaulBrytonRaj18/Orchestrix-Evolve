@@ -1,16 +1,41 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { api } from '../api'
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react'
+import { m, AnimatePresence } from 'framer-motion'
+import { api, streamJob } from '../api'
 import { useToast } from '../contexts/ToastContext'
 import AgentTraceLog from '../components/AgentTraceLog'
 import PaperCard from '../components/PaperCard'
-import AnalysisCharts from '../components/AnalysisCharts'
 import CitationPanel from '../components/CitationPanel'
 import SummaryPanel from '../components/SummaryPanel'
 import ConflictsPanel from '../components/ConflictsPanel'
 import RoadmapPanel from '../components/RoadmapPanel'
 import { Search as SearchIcon, FileText, BarChart3, Link2, Sparkles, AlertTriangle, Map, Loader2, ArrowRight } from 'lucide-react'
-import type { AgentTrace, PaperWithDetails, AnalysisData, RoadmapResponse } from '../types/api'
+import type {
+  AgentTrace,
+  PaperWithDetails,
+  AnalysisData,
+  RoadmapResponse,
+  PaperPreview,
+  OrchestrateResponse,
+  JobCreate,
+} from '../types/api'
+
+// recharts (~100 kB gzipped) loads only when the Analysis tab is opened.
+const AnalysisCharts = lazy(() => import('../components/AnalysisCharts'))
+
+/** Streamed previews have no stored metadata yet; give them the shape the cards expect. */
+function previewToPaper(p: PaperPreview, sessionId: string): PaperWithDetails {
+  const now = new Date().toISOString()
+  return {
+    ...p,
+    authors: p.authors ?? [],
+    session_id: sessionId,
+    created_at: now,
+    updated_at: now,
+    summary: null,
+    citation: null,
+    notes: [],
+  }
+}
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -40,11 +65,45 @@ function Search() {
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null)
   const [roadmap, setRoadmap] = useState<RoadmapResponse | null>(null)
   const [activeTab, setActiveTab] = useState<string>('papers')
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const streamRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
+    return () => streamRef.current?.abort() // stop following the job when leaving the page
   }, [])
+
+  /** Start a background job and follow its event stream until it finishes. */
+  const runJob = async (sessionId: string, body: JobCreate = {}) => {
+    streamRef.current?.abort()
+    const controller = new AbortController()
+    streamRef.current = controller
+    const job = await api.startJob(sessionId, body)
+    if (job.trace?.length) setTrace(job.trace)
+    await new Promise<void>((resolve) => {
+      streamJob(
+        job.id,
+        {
+          onTrace: setTrace,
+          onPapers: (preview) => {
+            // Ranked papers arrive seconds before summaries; show them right away.
+            if (body.kind !== 'followup') setPapers(preview.map((p) => previewToPaper(p, sessionId)))
+          },
+          onDone: (result: OrchestrateResponse) => {
+            setTrace(result.trace || [])
+            setPapers(result.papers || []) // the whole session, with stored ids
+            if (result.analysis) setAnalysis(result.analysis)
+            if (result.roadmap) setRoadmap(result.roadmap)
+            resolve()
+          },
+          onError: (message) => {
+            showToast(message, 'error')
+            resolve()
+          },
+        },
+        controller.signal,
+      ).finally(resolve)
+    })
+  }
 
   const handleSearch = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -55,20 +114,13 @@ function Search() {
     setTrace([])
     setPapers([])
     setAnalysis(null)
+    setRoadmap(null)
 
-    const timestamp = Date.now()
-    const sessionName = query.slice(0, 40) + '_' + timestamp
-
+    const sessionName = query.slice(0, 40) + '_' + Date.now()
     try {
       const session = await api.createSession(sessionName, query)
       setCurrentSessionId(session.id)
-
-      const result = await api.orchestrate(session.id)
-      setTrace(result.trace || [])
-      setPapers(result.papers || [])
-      setAnalysis(result.analysis || null)
-      setRoadmap(result.roadmap || null)
-
+      await runJob(session.id)
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Search failed', 'error')
     } finally {
@@ -76,47 +128,9 @@ function Search() {
     }
   }
 
-  const pollForUpdates = useCallback(async () => {
-    if (!currentSessionId) return
-
-    try {
-      const session = await api.getSession(currentSessionId)
-      if (session.papers && session.papers.length > 0) {
-        setPapers(session.papers)
-      }
-
-      const doneEntry = trace.find(e => e.agent === 'Citations & Summaries' && e.status === 'done')
-      if (doneEntry) {
-        if (pollingRef.current) {
-          clearInterval(pollingRef.current)
-          pollingRef.current = null
-        }
-      }
-    } catch {
-      // Polling errors are expected during long operations — ignore
-    }
-  }, [currentSessionId, trace])
-
-  useEffect(() => {
-    if (currentSessionId && isSearching) {
-      const interval = setInterval(pollForUpdates, 1500)
-      pollingRef.current = interval
-      return () => clearInterval(interval)
-    }
-  }, [currentSessionId, isSearching, pollForUpdates])
-
-  useEffect(() => {
-    return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current)
-        pollingRef.current = null
-      }
-    }
-  }, [])
-
   useEffect(() => {
     const fetchRoadmap = async () => {
-      if (activeTab === 'roadmap' && currentSessionId && !roadmap) {
+      if (activeTab === 'roadmap' && currentSessionId && !roadmap && !isSearching) {
         try {
           const roadmapData = await api.getRoadmap(currentSessionId)
           setRoadmap(roadmapData)
@@ -126,7 +140,7 @@ function Search() {
       }
     }
     fetchRoadmap()
-  }, [activeTab, currentSessionId, roadmap])
+  }, [activeTab, currentSessionId, roadmap, isSearching])
 
   const handleCopyCitation = (citation: string) => {
     navigator.clipboard.writeText(citation)
@@ -142,14 +156,13 @@ function Search() {
     }
   }
 
-  const handleRoadmapQueryClick = async (query: string) => {
+  const handleRoadmapQueryClick = async (followUp: string) => {
+    if (!currentSessionId) return
     setIsSearching(true)
+    setActiveTab('papers')
     try {
-      const result = await api.executeRoadmapQuery(currentSessionId!, query)
-      if (result.orchestration_result) {
-        setPapers(prev => [...prev, ...(result.orchestration_result.papers || [])])
-        setAnalysis(result.orchestration_result.analysis)
-      }
+      await runJob(currentSessionId, { kind: 'followup', query: followUp })
+      showToast(`Added results for "${followUp}"`, 'success')
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Roadmap query failed', 'error')
     } finally {
@@ -176,7 +189,7 @@ function Search() {
   return (
     <div className="search-page">
       {/* Hero Search */}
-      <motion.div
+      <m.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4 }}
@@ -227,7 +240,7 @@ function Search() {
 
         {/* Suggestions */}
         {!isSearching && papers.length === 0 && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.3 }}
@@ -248,14 +261,14 @@ function Search() {
                 </button>
               ))}
             </div>
-          </motion.div>
+          </m.div>
         )}
-      </motion.div>
+      </m.div>
 
       {/* Agent Activity */}
       <AnimatePresence>
         {isSearching && (
-          <motion.div
+          <m.div
             initial={{ opacity: 0, height: 0 }}
             animate={{ opacity: 1, height: 'auto' }}
             exit={{ opacity: 0, height: 0 }}
@@ -271,14 +284,14 @@ function Search() {
                 <AgentTraceLog trace={trace} />
               </div>
             </div>
-          </motion.div>
+          </m.div>
         )}
       </AnimatePresence>
 
       {/* Results */}
       <AnimatePresence>
-        {papers.length > 0 && !isSearching && (
-          <motion.div
+        {papers.length > 0 && (
+          <m.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
@@ -292,6 +305,7 @@ function Search() {
                 </h2>
                 <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
                   {papers.length} papers found
+                  {isSearching && ' · summaries and analysis on the way…'}
                 </p>
               </div>
             </div>
@@ -318,30 +332,30 @@ function Search() {
             </div>
 
             {/* Tab Content */}
-            <motion.div
+            <m.div
               key={activeTab}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.2 }}
             >
               {activeTab === 'papers' && (
-                <motion.div
+                <m.div
                   variants={containerVariants}
                   initial="hidden"
                   animate="visible"
                   className="papers-grid"
                 >
                   {papers.map((paper) => (
-                    <motion.div key={paper.id} variants={itemVariants}>
+                    <m.div key={paper.id} variants={itemVariants}>
                       <PaperCard
                         paper={paper}
                         onCopyCitation={handleCopyCitation}
                       />
-                    </motion.div>
+                    </m.div>
                   ))}
-                </motion.div>
+                </m.div>
               )}
-              {activeTab === 'analysis' && <AnalysisCharts analysis={analysis} />}
+              {activeTab === 'analysis' && <Suspense fallback={<div className="loading-spinner" />}><AnalysisCharts analysis={analysis} /></Suspense>}
               {activeTab === 'citations' && <CitationPanel papers={papers} />}
               {activeTab === 'summary' && <SummaryPanel papers={papers} onSynthesize={handleSynthesize} />}
               {activeTab === 'conflicts' && currentSessionId && <ConflictsPanel sessionId={currentSessionId} />}
@@ -360,8 +374,8 @@ function Search() {
                   }}
                 />
               )}
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         )}
       </AnimatePresence>
     </div>

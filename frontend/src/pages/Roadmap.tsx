@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence } from 'framer-motion'
 import { api } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { useToast } from '../contexts/ToastContext'
@@ -161,7 +161,7 @@ function Roadmap() {
 
                 <AnimatePresence>
                   {roadmap && isExpanded && (
-                    <motion.div
+                    <m.div
                       initial={{ height: 0, opacity: 0 }}
                       animate={{ height: 'auto', opacity: 1 }}
                       exit={{ height: 0, opacity: 0 }}
@@ -241,7 +241,7 @@ function Roadmap() {
                           </div>
                         )}
                       </div>
-                    </motion.div>
+                    </m.div>
                   )}
                 </AnimatePresence>
               </div>

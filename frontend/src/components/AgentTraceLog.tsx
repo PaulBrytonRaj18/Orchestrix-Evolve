@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { Check, Loader2, X, Circle } from 'lucide-react';
 import type { AgentTrace } from '../types/api';
 
@@ -57,7 +57,7 @@ function AgentTraceLog({ trace }: AgentTraceLogProps) {
   return (
     <div className="trace-container">
       {trace.map((entry, index) => (
-        <motion.div
+        <m.div
           key={index}
           className="trace-item"
           initial={{ opacity: 0, x: -10 }}
@@ -96,7 +96,7 @@ function AgentTraceLog({ trace }: AgentTraceLogProps) {
             {entry.status === 'error' && entry.error}
             {entry.status === 'skipped' && entry.reason}
           </span>
-        </motion.div>
+        </m.div>
       ))}
     </div>
   );

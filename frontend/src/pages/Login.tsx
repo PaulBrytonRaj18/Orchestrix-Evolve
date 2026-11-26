@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { useAuth } from '../contexts/AuthContext'
 import { Eye, EyeOff, Loader2 } from 'lucide-react'
 
@@ -30,7 +30,7 @@ function Login() {
 
   return (
     <div className="auth-container">
-      <motion.div
+      <m.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3 }}
@@ -49,14 +49,14 @@ function Login() {
 
         <form className="auth-form" onSubmit={handleSubmit}>
           {error && (
-            <motion.div
+            <m.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               className="form-error"
               style={{ padding: 'var(--space-3)', background: 'var(--error-subtle)', borderRadius: 'var(--radius-md)', color: 'var(--error-primary)' }}
             >
               {error}
-            </motion.div>
+            </m.div>
           )}
 
           <div className="form-group">
@@ -127,7 +127,7 @@ function Login() {
         <div className="auth-footer">
           Don't have an account? <Link to="/register" className="auth-link">Create one</Link>
         </div>
-      </motion.div>
+      </m.div>
     </div>
   )
 }

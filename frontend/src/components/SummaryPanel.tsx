@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
 import type { Paper } from '../types/api';
 
@@ -171,7 +171,7 @@ function SummaryPanel({ papers, onSynthesize }: SummaryPanelProps) {
                     )}
 
                     {expandedPapers[paper.id] && (
-                      <motion.div
+                      <m.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         style={{
@@ -234,7 +234,7 @@ function SummaryPanel({ papers, onSynthesize }: SummaryPanelProps) {
                             </p>
                           </div>
                         )}
-                      </motion.div>
+                      </m.div>
                     )}
                   </div>
                 )}

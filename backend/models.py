@@ -45,6 +45,8 @@ class User(Base):
 class Session(Base):
     __tablename__ = "sessions"
 
+    __table_args__ = (Index("idx_sessions_user_updated", "user_id", "updated_at"),)
+
     id = Column(String, primary_key=True, default=generate_uuid)
     user_id = Column(String, nullable=True, index=True)
     name = Column(String, nullable=False)
@@ -58,6 +60,7 @@ class Session(Base):
     conflicts = relationship("Conflict", back_populates="session", cascade="all, delete-orphan")
     roadmaps = relationship("Roadmap", back_populates="session", cascade="all, delete-orphan")
     digest_runs = relationship("DigestRun", back_populates="session", cascade="all, delete-orphan")
+    jobs = relationship("OrchestrationJob", back_populates="session", cascade="all, delete-orphan")
 
 
 class Paper(Base):
@@ -79,7 +82,8 @@ class Paper(Base):
 
     __table_args__ = (
         Index("idx_papers_session_created", "session_id", "created_at"),
-        Index("idx_papers_session_external", "session_id", "external_id"),
+        # One row per work per session; NULL external ids stay unconstrained.
+        Index("uq_papers_session_external", "session_id", "external_id", unique=True),
     )
 
     session = relationship("Session", back_populates="papers")
@@ -102,7 +106,9 @@ class Analysis(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (Index("idx_analyses_session_type", "session_id", "analysis_type"),)
+    __table_args__ = (
+        Index("uq_analyses_session_type", "session_id", "analysis_type", unique=True),
+    )
 
     session = relationship("Session", back_populates="analyses")
 
@@ -110,8 +116,10 @@ class Analysis(Base):
 class Summary(Base):
     __tablename__ = "summaries"
 
+    __table_args__ = (Index("uq_summaries_paper_id", "paper_id", unique=True),)
+
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False, index=True)
+    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
     abstract_compression = Column(Text, nullable=True)
     key_contributions = Column(Text, nullable=True)
     methodology = Column(Text, nullable=True)
@@ -138,8 +146,10 @@ class Synthesis(Base):
 class Citation(Base):
     __tablename__ = "citations"
 
+    __table_args__ = (Index("uq_citations_paper_id", "paper_id", unique=True),)
+
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False, index=True)
+    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
     apa = Column(Text, nullable=True)
     mla = Column(Text, nullable=True)
     ieee = Column(Text, nullable=True)
@@ -178,13 +188,18 @@ class Conflict(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (Index("idx_conflicts_session_severity", "session_id", "severity"),)
+    __table_args__ = (
+        Index("idx_conflicts_session_severity", "session_id", "severity"),
+        Index("idx_conflicts_session_resolved", "session_id", "resolved"),
+    )
 
     session = relationship("Session", back_populates="conflicts")
 
 
 class ScheduledDigest(Base):
     __tablename__ = "scheduled_digests"
+
+    __table_args__ = (Index("idx_digests_user_created", "user_id", "created_at"),)
 
     id = Column(String, primary_key=True, default=generate_uuid)
     user_id = Column(String, nullable=True, index=True)
@@ -219,7 +234,10 @@ class DigestRun(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    __table_args__ = (Index("idx_digest_runs_sched_status", "scheduled_digest_id", "status"),)
+    __table_args__ = (
+        Index("idx_digest_runs_sched_status", "scheduled_digest_id", "status"),
+        Index("idx_digest_runs_sched_created", "scheduled_digest_id", "created_at"),
+    )
 
     scheduled_digest = relationship("ScheduledDigest", back_populates="runs")
     session = relationship("Session", back_populates="digest_runs")
@@ -228,8 +246,10 @@ class DigestRun(Base):
 class Roadmap(Base):
     __tablename__ = "roadmaps"
 
+    __table_args__ = (Index("uq_roadmaps_session_id", "session_id", unique=True),)
+
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
     foundational_papers_json = Column(JSON, nullable=False)
     gap_areas_json = Column(JSON, nullable=False)
     next_queries_json = Column(JSON, nullable=False)
@@ -237,3 +257,44 @@ class Roadmap(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     session = relationship("Session", back_populates="roadmaps")
+
+
+class SourceCacheEntry(Base):
+    """Cached result of one discovery-source request, shared by every process."""
+
+    __tablename__ = "source_cache"
+
+    key = Column(String(64), primary_key=True)  # sha256 of source + normalised request
+    source = Column(String(50), nullable=False)
+    payload = Column(JSON, nullable=False)
+    expires_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class OrchestrationJob(Base):
+    """One background agent run. Its trace is updated live; the result lives in the
+    session's tables once the job completes."""
+
+    __tablename__ = "orchestration_jobs"
+    __table_args__ = (
+        Index("idx_jobs_session_created", "session_id", "created_at"),
+        Index("idx_jobs_user_status", "user_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False)
+    user_id = Column(String, nullable=False)
+    kind = Column(String(20), nullable=False, default="search")  # search | followup
+    query = Column(String, nullable=False)
+    page = Column(Integer, nullable=False, default=0)
+    status = Column(String(20), nullable=False, default="queued")  # queued|running|completed|failed
+    trace = Column(JSON, nullable=False, default=list)
+    error = Column(Text, nullable=True)
+    conflict_summary = Column(Text, nullable=True)
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    session = relationship("Session", back_populates="jobs")

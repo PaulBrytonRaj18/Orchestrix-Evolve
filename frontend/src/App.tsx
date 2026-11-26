@@ -1,12 +1,16 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { m, AnimatePresence, LazyMotion } from 'framer-motion'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { ThemeProvider, useTheme } from './contexts/ThemeContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import { ToastProvider } from './contexts/ToastContext'
 import { Sun, Moon, SearchIcon, LayoutDashboard, Map, GitCompare, Mail, LogOut, Menu, X } from 'lucide-react'
 import './app.css'
+
+// Animation features download after first paint; `strict` forbids the heavy
+// `motion` component from creeping back in (use `m`).
+const loadMotionFeatures = () => import('./lib/motionFeatures').then((mod) => mod.default)
 
 const Search = lazy(() => import('./pages/Search'))
 const Dashboard = lazy(() => import('./pages/Dashboard'))
@@ -93,7 +97,7 @@ function NavContent() {
         Skip to content
       </a>
 
-      <motion.nav 
+      <m.nav 
         className="app-nav"
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -164,7 +168,7 @@ function NavContent() {
         {/* Mobile Menu */}
         <AnimatePresence>
           {mobileMenuOpen && (
-            <motion.div
+            <m.div
               className="nav-mobile-menu"
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
@@ -185,14 +189,14 @@ function NavContent() {
                   )
                 })}
               </div>
-            </motion.div>
+            </m.div>
           )}
         </AnimatePresence>
-      </motion.nav>
+      </m.nav>
 
       <main className="app-main" id="main-content">
         <AnimatePresence mode="wait">
-          <motion.div
+          <m.div
             key={location.pathname}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
@@ -230,7 +234,7 @@ function NavContent() {
                 } />
               </Routes>
             </Suspense>
-          </motion.div>
+          </m.div>
         </AnimatePresence>
       </main>
 
@@ -246,6 +250,7 @@ function NavContent() {
 function App() {
   return (
     <ErrorBoundary>
+      <LazyMotion features={loadMotionFeatures} strict>
       <div className="app-container">
         <AuthProvider>
           <ThemeProvider>
@@ -258,6 +263,7 @@ function App() {
           </ThemeProvider>
         </AuthProvider>
       </div>
+      </LazyMotion>
     </ErrorBoundary>
   )
 }

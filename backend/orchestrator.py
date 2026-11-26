@@ -71,17 +71,37 @@ def resolve_workflow(requested: list[str]) -> list[str]:
     return [a for a in FULL_WORKFLOW if a in wanted] or FULL_WORKFLOW
 
 
-class Trace:
-    """Ordered agent log, shaped for the UI's AgentTraceLog component."""
+EventListener = Callable[[str, Any], None]
 
-    def __init__(self) -> None:
+
+class Trace:
+    """Ordered agent log, shaped for the UI's AgentTraceLog component.
+
+    Every change is pushed to ``listener`` (if any) as a ``("trace", entries)`` event,
+    which is what lets the jobs API stream progress live.
+    """
+
+    def __init__(self, listener: EventListener | None = None) -> None:
         self.entries: list[dict[str, Any]] = []
+        self._listener = listener
+
+    def emit(self, event: str, data: Any) -> None:
+        if self._listener is None:
+            return
+        try:
+            self._listener(event, data)
+        except Exception:  # a broken subscriber must never break the run
+            logger.exception("Trace listener failed on %s", event)
+
+    def changed(self) -> None:
+        self.emit("trace", [dict(e) for e in self.entries])
 
     async def step(
         self, agent: str, fn: Callable[[], Awaitable[Any]], describe: Callable[[Any], str]
     ) -> Any:
         entry: dict[str, Any] = {"agent": agent, "status": "running", "timestamp": utcnow()}
         self.entries.append(entry)
+        self.changed()
         started = time.perf_counter()
         try:
             result = await fn()
@@ -92,12 +112,14 @@ class Trace:
         else:
             entry.update(status="done", result=describe(result))
         entry["duration_ms"] = int((time.perf_counter() - started) * 1000)
+        self.changed()
         return result
 
     def skip(self, agent: str, reason: str) -> None:
         self.entries.append(
             {"agent": agent, "status": "skipped", "reason": reason, "timestamp": utcnow()}
         )
+        self.changed()
 
 
 async def plan_workflow(query: str, trace: Trace) -> list[str]:
@@ -113,6 +135,7 @@ async def plan_workflow(query: str, trace: Trace) -> list[str]:
                 "duration_ms": 0,
             }
         )
+        trace.changed()
         return FULL_WORKFLOW
 
     async def ask() -> list[str]:
@@ -143,7 +166,26 @@ def _empty_analysis() -> dict[str, list]:
     }
 
 
-async def orchestrate(query: str, session_id: str, page: int = 0) -> dict[str, Any]:
+PREVIEW_FIELDS = (
+    "id",
+    "title",
+    "authors",
+    "year",
+    "abstract",
+    "source_url",
+    "citation_count",
+    "relevance_score",
+    "external_id",
+    "source",
+)
+
+
+async def orchestrate(
+    query: str,
+    session_id: str,
+    page: int = 0,
+    listener: EventListener | None = None,
+) -> dict[str, Any]:
     """Run the agent graph for ``query``. Pure computation: persistence is the caller's job.
 
     Every returned paper has a provisional ``id`` that summaries and the roadmap refer
@@ -151,7 +193,7 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> dict[str, A
     """
     settings = get_settings()
     async with _session_lock(session_id):
-        trace = Trace()
+        trace = Trace(listener)
         workflow = await plan_workflow(query, trace)
 
         papers: list[dict[str, Any]] = (
@@ -164,6 +206,9 @@ async def orchestrate(query: str, session_id: str, page: int = 0) -> dict[str, A
         )
         for paper in papers:
             paper["id"] = str(uuid.uuid4())
+        if papers:
+            # Ranked papers are useful long before summaries finish: stream them now.
+            trace.emit("papers", [{k: p.get(k) for k in PREVIEW_FIELDS} for p in papers])
 
         # ── Stage 2: independent agents, concurrently ───────────────────────
         async def run_analysis() -> dict | None:

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { motion } from 'framer-motion'
+import { m } from 'framer-motion'
 import { api } from '../api'
 import { useToast } from '../contexts/ToastContext'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts'
@@ -199,7 +199,7 @@ function SessionCompare() {
       )}
 
       {selectedA && selectedB && sessionA && sessionB && (
-        <motion.div
+        <m.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
         >
@@ -298,7 +298,7 @@ function SessionCompare() {
               </div>
             </div>
           </div>
-        </motion.div>
+        </m.div>
       )}
 
       {(!selectedA || !selectedB) && (
