@@ -12,6 +12,10 @@ import type {
   RoadmapResponse,
   SynthesisResponse,
   User,
+  JobCreate,
+  JobResponse,
+  JobStatus,
+  JobStreamHandlers,
 } from './types/api';
 import { supabase } from './lib/supabase';
 
@@ -97,6 +101,108 @@ function downloadBlob(blob: Blob, filename: string, _mimeType: string): void {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+// ── Server-Sent Events over fetch ────────────────────────────────────────────
+// EventSource cannot send an Authorization header, so the stream is read with
+// fetch + ReadableStream. The server replays a snapshot on every connect, so a
+// dropped connection is simply re-opened (bounded retries with backoff).
+
+function parseSseBlock(block: string): { event: string; data: string } | null {
+  let event = 'message';
+  const data: string[] = [];
+  for (const line of block.split('\n')) {
+    if (line.startsWith(':')) continue; // keep-alive comment
+    if (line.startsWith('event:')) event = line.slice(6).trim();
+    else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+  }
+  return data.length ? { event, data: data.join('\n') } : null;
+}
+
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function streamJobOnce(
+  jobId: string,
+  handlers: JobStreamHandlers,
+  signal: AbortSignal,
+): Promise<'finished' | 'dropped'> {
+  const token = await getToken();
+  const response = await fetch(`${API_BASE}/jobs/${jobId}/events`, {
+    headers: {
+      Accept: 'text/event-stream',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    signal,
+  });
+  if (response.status === 401) {
+    removeToken();
+    window.dispatchEvent(new CustomEvent('auth:logout'));
+    throw new Error('Session expired — please sign in again');
+  }
+  if (!response.ok || !response.body) {
+    const body = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+    throw new Error((body as { detail?: string }).detail || `HTTP ${response.status}`);
+  }
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return 'dropped';
+    buffer += value.replace(/\r\n/g, '\n');
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary !== -1) {
+      const parsed = parseSseBlock(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf('\n\n');
+      if (!parsed) continue;
+      const data = JSON.parse(parsed.data);
+      switch (parsed.event) {
+        case 'status':
+          handlers.onStatus?.((data as { status: JobStatus }).status);
+          break;
+        case 'trace':
+          handlers.onTrace?.(data);
+          break;
+        case 'papers':
+          handlers.onPapers?.(data);
+          break;
+        case 'done':
+          handlers.onDone(data);
+          await reader.cancel();
+          return 'finished';
+        case 'error':
+          handlers.onError((data as { message: string }).message);
+          await reader.cancel();
+          return 'finished';
+      }
+    }
+  }
+}
+
+/** Follow a job until it finishes. Resolves when done/error was delivered or aborted. */
+export async function streamJob(
+  jobId: string,
+  handlers: JobStreamHandlers,
+  signal: AbortSignal,
+  maxReconnects = 5,
+): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      if ((await streamJobOnce(jobId, handlers, signal)) === 'finished') return;
+    } catch (error) {
+      if (signal.aborted) return;
+      if (attempt >= maxReconnects) {
+        handlers.onError(error instanceof Error ? error.message : 'Lost connection to the server');
+        return;
+      }
+    }
+    if (signal.aborted) return;
+    if (attempt >= maxReconnects) {
+      handlers.onError('Lost connection to the server');
+      return;
+    }
+    await wait(Math.min(500 * 2 ** attempt, 8000));
+  }
 }
 
 export const api = {
@@ -244,6 +350,17 @@ export const api = {
 
   getRoadmap: (sessionId: string): Promise<RoadmapResponse> =>
     fetchJSON<RoadmapResponse>(`/sessions/${sessionId}/roadmap`),
+
+  startJob: (sessionId: string, body: JobCreate = {}): Promise<JobResponse> =>
+    fetchJSON<JobResponse>(`/sessions/${sessionId}/jobs`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  getJob: (jobId: string): Promise<JobResponse> => fetchJSON<JobResponse>(`/jobs/${jobId}`),
+
+  listSessionJobs: (sessionId: string): Promise<JobResponse[]> =>
+    fetchJSON<JobResponse[]>(`/sessions/${sessionId}/jobs`),
 
   executeRoadmapQuery: (
     sessionId: string,

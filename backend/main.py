@@ -17,11 +17,12 @@ from sqlalchemy import text
 from config import get_settings
 from database import close_engine, engine, init_db, is_postgres
 from routers import auth as auth_router
-from routers import digests, sessions
+from routers import digests, jobs, sessions
 from scheduler import scheduler
 from schemas import HealthResponse
+from services.jobs import job_manager
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 settings = get_settings()
 
 logging.basicConfig(
@@ -38,9 +39,11 @@ async def lifespan(_: FastAPI):
         logger.warning("Configuration: %s", problem)
     await run_in_threadpool(init_db)
     logger.info("Database: %s", "PostgreSQL" if is_postgres() else "SQLite")
+    await job_manager.start()
     if settings.enable_scheduler:
         scheduler.start()
     yield
+    await job_manager.shutdown()
     scheduler.stop()
     close_engine()
 
@@ -136,6 +139,7 @@ app.include_router(auth_router.router)
 app.include_router(sessions.router)
 app.include_router(sessions.notes_router)
 app.include_router(digests.router)
+app.include_router(jobs.router)
 
 
 if __name__ == "__main__":

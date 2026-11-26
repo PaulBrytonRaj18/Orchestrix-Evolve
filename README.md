@@ -85,7 +85,7 @@ The production image runs `alembic upgrade head` before starting uvicorn.
 
 ```bash
 cd backend
-pytest                                   # 190 tests, SQLite, no network
+pytest                                   # 214 tests, SQLite, no network
 TEST_DATABASE_URL=postgresql://... pytest  # same suite against Postgres
 RUN_LIVE=1 pytest -m live                # contract checks against the real APIs
 ruff check . && ruff format --check .
@@ -271,6 +271,17 @@ score = 0.35 × tfidf_cosine(query, title+abstract)
 
 Citations are log-scaled because counts are heavy-tailed. Ranking runs in a worker thread.
 
+### Discovery performance
+- **Deadline:** each search waits at most `DISCOVERY_DEADLINE` (8 s) for the sources;
+  slower ones are cancelled and reported as `timeout`.
+- **Cooldown:** a source that just failed (rate limit, outage, timeout) is skipped for
+  `SOURCE_FAILURE_COOLDOWN_SECONDS` instead of costing every search its retries.
+- **Cache:** successful source responses are cached for 24 h (1 h for digest "since"
+  queries) in memory and in the `source_cache` table, shared by all replicas.
+
+Measured end to end in a browser (live arXiv + OpenAlex): first results after ~3.9 s,
+a repeated search completes in ~0.8 s.
+
 ## Safety Score Algorithm
 
 The Safety Score feature is not applicable to this application as it focuses on academic research discovery rather than content safety assessment.
@@ -332,7 +343,19 @@ Manages scheduled research digests:
 | GET | /sessions/{id}/export/txt?style=apa\|mla\|ieee\|chicago | Export citations as text |
 | POST | /sessions/{id}/roadmap | Rebuild roadmap from stored data |
 | GET | /sessions/{id}/roadmap | Get roadmap |
-| POST | /sessions/{id}/roadmap/query?query=… | Run a suggested query into the session |
+| POST | /sessions/{id}/roadmap/query?query=… | Run a suggested query into the session (blocking) |
+
+### Background jobs (what the SPA uses)
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /sessions/{id}/jobs | Start a search (`{}`) or follow-up (`{"kind":"followup","query":"…"}`) → **202** + job; an identical running job is reused |
+| GET | /sessions/{id}/jobs | Recent jobs for a session (resume after a reload) |
+| GET | /jobs/{id} | Status and agent trace (polling fallback) |
+| GET | /jobs/{id}/events | **Server-Sent Events**: `status`, `trace`, `papers` (ranked papers right after discovery), then `done` (full result) or `error` |
+
+The stream replays a snapshot on connect, so clients can reconnect at any time; jobs
+running in another replica (or already finished) are streamed from the database.
+Read it with `fetch` (not `EventSource`) so the `Authorization` header can be sent.
 
 All endpoints except `/health` and `/auth/register|login|refresh` require `Authorization: Bearer <Supabase access token>`.
 

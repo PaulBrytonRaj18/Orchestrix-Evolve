@@ -60,6 +60,23 @@ def make_paper(i: int, **overrides) -> dict:
     return base
 
 
+@pytest.fixture(autouse=True)
+def _empty_source_cache():
+    """Every test starts with a cold source cache (memory and table)."""
+    from sqlalchemy import delete
+
+    from agents.discovery import reset_cooldowns
+    from database import get_db_context
+    from models import SourceCacheEntry
+    from services.cache import source_cache
+
+    source_cache.clear_memory()
+    reset_cooldowns()
+    with get_db_context() as db:
+        db.execute(delete(SourceCacheEntry))
+    yield
+
+
 @pytest.fixture
 def fake_sources(monkeypatch):
     """Replace network fetching with 12 deterministic papers."""
@@ -67,7 +84,8 @@ def fake_sources(monkeypatch):
 
     async def fake_fetch(query, page=0, limit=None, since=None, sources=discovery.SOURCES):
         calls.append({"query": query, "page": page, "since": since})
-        return [make_paper(i) for i in range(1, 13)], {s: 4 for s in sources}
+        stats = {s: {"status": "ok", "count": 4, "ms": 1} for s in sources}
+        return [make_paper(i) for i in range(1, 13)], stats
 
     monkeypatch.setattr(discovery, "fetch_all_sources", fake_fetch)
     return calls

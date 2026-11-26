@@ -113,14 +113,100 @@ class TestSources:
         assert papers[0]["external_id"] == "arxiv:2001.00001"
 
     @respx.mock
+    async def test_semantic_scholar_sends_api_key_when_configured(self, monkeypatch):
+        from config import get_settings
+
+        monkeypatch.setattr(get_settings(), "semantic_scholar_api_key", "k-123")
+        route = respx.get(S.semantic_scholar_url).mock(
+            return_value=httpx.Response(200, json={"data": []})
+        )
+        async with httpx.AsyncClient() as c:
+            assert await discovery.query_semantic_scholar(c, "q", 0, 5) == []
+        assert route.calls.last.request.headers["x-api-key"] == "k-123"
+
+    @respx.mock
     async def test_failed_source_degrades_gracefully(self, monkeypatch):
         monkeypatch.setattr(discovery.asyncio, "sleep", _no_sleep)
         respx.get(S.semantic_scholar_url).mock(return_value=httpx.Response(429))
         respx.get(S.openalex_url).mock(return_value=httpx.Response(400, json={}))
         respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
         papers, stats = await discovery.fetch_all_sources("gnn")
-        assert stats == {"semantic_scholar": 0, "arxiv": 1, "openalex": 0}
+        assert {k: v["status"] for k, v in stats.items()} == {
+            "semantic_scholar": "error",
+            "arxiv": "ok",
+            "openalex": "error",
+        }
+        assert stats["arxiv"]["count"] == 1 and len(papers) == 1
+
+    @respx.mock
+    async def test_slow_source_is_cut_at_the_deadline(self, monkeypatch):
+        import asyncio
+
+        from config import get_settings
+
+        monkeypatch.setattr(get_settings(), "discovery_deadline", 0.3)
+
+        async def slow(request):
+            await asyncio.sleep(5)
+            return httpx.Response(200, json={"data": []})
+
+        respx.get(S.semantic_scholar_url).mock(side_effect=slow)
+        respx.get(S.openalex_url).mock(return_value=httpx.Response(200, json={"results": []}))
+        respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        papers, stats = await discovery.fetch_all_sources("gnn")
+        assert loop.time() - started < 1.5
+        assert stats["semantic_scholar"]["status"] == "timeout"
+        assert stats["openalex"] == {"status": "ok", "count": 0, "ms": stats["openalex"]["ms"]}
         assert len(papers) == 1
+
+    @respx.mock
+    async def test_successful_responses_are_cached_failures_are_not(self, monkeypatch):
+        from services.cache import source_cache
+
+        monkeypatch.setattr(discovery.asyncio, "sleep", _no_sleep)
+        s2 = respx.get(S.semantic_scholar_url).mock(return_value=httpx.Response(429))
+        oa = respx.get(S.openalex_url).mock(return_value=httpx.Response(200, json={"results": []}))
+        ax = respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
+
+        await discovery.fetch_all_sources("Graph  NETWORKS")
+        first_s2_calls = s2.call_count
+        papers, stats = await discovery.fetch_all_sources("graph networks")  # same, normalised
+        assert stats["arxiv"]["status"] == "cached" and stats["openalex"]["status"] == "cached"
+        # The failure was not cached; the source is now cooling down instead of retried.
+        assert stats["semantic_scholar"]["status"] == "skipped"
+        assert ax.call_count == 1 and oa.call_count == 1 and s2.call_count == first_s2_calls
+        key = source_cache.make_key("semantic_scholar", "graph networks", 0, 50, None)
+        assert await source_cache.get(key) is None
+        # Cached copies are independent: mutating a result does not poison the cache.
+        papers[0]["title"] = "mutated"
+        again, _ = await discovery.fetch_all_sources("graph networks")
+        assert again[0]["title"] != "mutated"
+        assert source_cache.hits >= 4
+
+    @respx.mock
+    async def test_cache_is_shared_through_the_database(self):
+        from services.cache import source_cache
+
+        respx.get(S.semantic_scholar_url).mock(return_value=httpx.Response(200, json={"data": []}))
+        respx.get(S.openalex_url).mock(return_value=httpx.Response(200, json={"results": []}))
+        ax = respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
+        await discovery.fetch_all_sources("gnn")
+        source_cache.clear_memory()  # simulate another process: only the table remains
+        _, stats = await discovery.fetch_all_sources("gnn")
+        assert stats["arxiv"]["status"] == "cached" and ax.call_count == 1
+
+    @respx.mock
+    async def test_since_queries_have_their_own_cache_entries(self):
+        from datetime import date
+
+        respx.get(S.semantic_scholar_url).mock(return_value=httpx.Response(200, json={"data": []}))
+        respx.get(S.openalex_url).mock(return_value=httpx.Response(200, json={"results": []}))
+        ax = respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
+        await discovery.fetch_all_sources("gnn")
+        await discovery.fetch_all_sources("gnn", since=date(2026, 1, 1))
+        assert ax.call_count == 2
 
 
 async def _no_sleep(_):
@@ -180,3 +266,38 @@ class TestRanking:
         started = time.perf_counter()
         discovery.compute_semantic_similarity("w1 w2 w3", papers)
         assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.asyncio
+class TestCooldown:
+    @respx.mock
+    async def test_failed_source_is_skipped_until_cooldown_ends(self, monkeypatch):
+        monkeypatch.setattr(discovery.asyncio, "sleep", _no_sleep)
+        s2 = respx.get(S.semantic_scholar_url).mock(return_value=httpx.Response(429))
+        respx.get(S.openalex_url).mock(return_value=httpx.Response(200, json={"results": []}))
+        respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
+
+        _, first = await discovery.fetch_all_sources("q1")
+        calls_after_failure = s2.call_count
+        _, second = await discovery.fetch_all_sources("q2")  # different query: no cache help
+        assert first["semantic_scholar"]["status"] == "error"
+        assert second["semantic_scholar"]["status"] == "skipped"
+        assert s2.call_count == calls_after_failure  # no network call while cooling down
+
+        # Cooldown over → the source is tried again, and success clears the state.
+        discovery._cooldown_until["semantic_scholar"] = 0.0
+        s2.mock(return_value=httpx.Response(200, json={"data": []}))
+        _, third = await discovery.fetch_all_sources("q3")
+        assert third["semantic_scholar"]["status"] == "ok"
+        assert "semantic_scholar" not in discovery._cooldown_until
+
+    @respx.mock
+    async def test_cooldown_can_be_disabled(self, monkeypatch):
+        monkeypatch.setattr(discovery.asyncio, "sleep", _no_sleep)
+        monkeypatch.setattr(S, "source_failure_cooldown_seconds", 0)
+        respx.get(S.semantic_scholar_url).mock(return_value=httpx.Response(429))
+        respx.get(S.openalex_url).mock(return_value=httpx.Response(200, json={"results": []}))
+        respx.get(S.arxiv_url).mock(return_value=httpx.Response(200, text=ARXIV_FEED))
+        await discovery.fetch_all_sources("q1")
+        _, again = await discovery.fetch_all_sources("q2")
+        assert again["semantic_scholar"]["status"] == "error"

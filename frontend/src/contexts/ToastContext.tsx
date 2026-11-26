@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 import { X, CheckCircle, AlertCircle, AlertTriangle, Info } from 'lucide-react';
 
 type ToastType = 'success' | 'error' | 'warning' | 'info';
@@ -60,7 +60,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       <div className="toast-container">
         <AnimatePresence>
           {toasts.map(toast => (
-            <motion.div
+            <m.div
               key={toast.id}
               className="toast-item"
               initial={{ opacity: 0, y: -20, scale: 0.95 }}
@@ -83,7 +83,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
               >
                 <X size={16} />
               </button>
-            </motion.div>
+            </m.div>
           ))}
         </AnimatePresence>
       </div>

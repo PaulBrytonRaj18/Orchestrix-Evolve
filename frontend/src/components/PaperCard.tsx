@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 import { Copy, Check, ExternalLink, BookOpen, X } from 'lucide-react';
 import type { Paper, CitationStyle } from '../types/api';
 
@@ -104,7 +104,7 @@ function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCard
 
         <AnimatePresence>
           {showSummary && paper.summary && (
-            <motion.div
+            <m.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
               exit={{ opacity: 0, height: 0 }}
@@ -169,7 +169,7 @@ function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCard
                   </p>
                 </div>
               )}
-            </motion.div>
+            </m.div>
           )}
         </AnimatePresence>
 
@@ -249,14 +249,14 @@ function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCard
 
       <AnimatePresence>
         {showCitationModal && paper.citation && (
-          <motion.div
+          <m.div
             className="modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setShowCitationModal(false)}
           >
-            <motion.div
+            <m.div
               className="modal"
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -335,8 +335,8 @@ function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCard
                   </div>
                 ))}
               </div>
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         )}
       </AnimatePresence>
     </>

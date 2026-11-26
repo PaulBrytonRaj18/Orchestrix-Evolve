@@ -13,6 +13,7 @@ import asyncio
 import logging
 import math
 import re
+import time
 from collections import Counter
 from datetime import UTC, date, datetime
 from typing import Any
@@ -22,6 +23,7 @@ import httpx
 
 from config import get_settings
 from constants import STOPWORDS
+from services.cache import source_cache
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +138,29 @@ def _make_paper(
 # ─── HTTP ────────────────────────────────────────────────────────────────────
 
 
+class SourceError(Exception):
+    """A source failed (HTTP error, rate limit, network). Distinct from "no results",
+    so failures are reported in stats and never written to the cache."""
+
+
+class SourceCoolingDownError(Exception):
+    """The source failed recently and is being skipped until its cooldown ends."""
+
+
+# source → monotonic time until which it is skipped (per process).
+_cooldown_until: dict[str, float] = {}
+
+
+def _cool_down(name: str) -> None:
+    seconds = get_settings().source_failure_cooldown_seconds
+    if seconds > 0:
+        _cooldown_until[name] = time.monotonic() + seconds
+
+
+def reset_cooldowns() -> None:
+    _cooldown_until.clear()
+
+
 async def fetch_with_retry(
     client: httpx.AsyncClient,
     url: str,
@@ -193,7 +218,7 @@ async def query_semantic_scholar(
     headers = {"x-api-key": s.semantic_scholar_api_key} if s.semantic_scholar_api_key else None
     response = await fetch_with_retry(client, s.semantic_scholar_url, params, headers)
     if response is None:
-        return []
+        raise SourceError("semantic_scholar unavailable")
     papers = []
     for item in response.json().get("data") or []:
         ids = item.get("externalIds") or {}
@@ -237,7 +262,7 @@ async def query_arxiv(
     }
     response = await fetch_with_retry(client, s.arxiv_url, params)
     if response is None:
-        return []
+        raise SourceError("arxiv unavailable")
     feed = feedparser.parse(response.text)
     papers = []
     for entry in feed.entries:
@@ -278,7 +303,7 @@ async def query_openalex(
         params["mailto"] = s.openalex_mailto
     response = await fetch_with_retry(client, s.openalex_url, params)
     if response is None:
-        return []
+        raise SourceError("openalex unavailable")
     papers = []
     for item in response.json().get("results") or []:
         location = item.get("primary_location") or {}
@@ -315,33 +340,91 @@ _FETCHERS = {
 }
 
 
+async def _fetch_one(
+    client: httpx.AsyncClient,
+    name: str,
+    query: str,
+    page: int,
+    limit: int,
+    since: date | None,
+) -> tuple[list[dict[str, Any]], str]:
+    """One source through the cache. Returns ``(papers, "ok" | "cached")``; raises on failure."""
+    key = source_cache.make_key(name, query, page, limit, since)
+    cached = await source_cache.get(key)
+    if cached is not None:
+        return cached, "cached"
+    if _cooldown_until.get(name, 0.0) > time.monotonic():
+        raise SourceCoolingDownError(name)
+    try:
+        papers = await _FETCHERS[name](client, query, page, limit, since)
+    except SourceError:
+        _cool_down(name)
+        raise
+    _cooldown_until.pop(name, None)
+    await source_cache.set(key, name, papers, since is not None)
+    return papers, "ok"
+
+
 async def fetch_all_sources(
     query: str,
     page: int = 0,
     limit: int | None = None,
     since: date | None = None,
     sources: tuple[str, ...] = SOURCES,
-) -> tuple[list[dict[str, Any]], dict[str, int]]:
-    """Query every source concurrently. Returns ``(papers, {source: count or -1 on error})``."""
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    """Query every source concurrently, each through the response cache.
+
+    Sources still running at ``DISCOVERY_DEADLINE`` seconds are cancelled and reported
+    as ``timeout``; whatever arrived by then is returned, so one slow or rate-limited
+    API can no longer hold up a search.
+
+    Returns ``(papers, {source: {"status", "count", "ms"}})`` where status is one of
+    ``ok``, ``cached``, ``error``, ``timeout`` or ``skipped`` (cooling down after a
+    recent failure, see ``SOURCE_FAILURE_COOLDOWN_SECONDS``).
+    """
     s = get_settings()
     limit = limit or s.discovery_per_source_limit
+    started = time.perf_counter()
+    stats: dict[str, dict[str, Any]] = {}
+    papers: list[dict[str, Any]] = []
     async with httpx.AsyncClient(
         timeout=s.discovery_timeout,
         follow_redirects=True,
-        headers={"User-Agent": "Orchestrix/2.1 (research discovery)"},
+        headers={"User-Agent": "Orchestrix/2.2 (research discovery)"},
     ) as client:
-        results = await asyncio.gather(
-            *(_FETCHERS[name](client, query, page, limit, since) for name in sources),
-            return_exceptions=True,
-        )
-    papers: list[dict[str, Any]] = []
-    stats: dict[str, int] = {}
-    for name, result in zip(sources, results, strict=True):
-        if isinstance(result, BaseException):
-            logger.error("Discovery source %s failed: %s", name, result)
-            stats[name] = -1
+        tasks = {
+            asyncio.create_task(_fetch_one(client, name, query, page, limit, since)): name
+            for name in sources
+        }
+        finished_at: dict[str, float] = {}
+
+        def _mark(task: asyncio.Task) -> None:
+            finished_at[tasks[task]] = time.perf_counter()
+
+        for task in tasks:
+            task.add_done_callback(_mark)
+        done, pending = await asyncio.wait(tasks, timeout=s.discovery_deadline)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    for task, name in tasks.items():
+        ms = int((finished_at.get(name, time.perf_counter()) - started) * 1000)
+        if task in pending:
+            logger.warning(
+                "Discovery source %s exceeded the %.1fs deadline", name, s.discovery_deadline
+            )
+            _cool_down(name)
+            stats[name] = {"status": "timeout", "count": 0, "ms": ms}
+        elif isinstance(task.exception(), SourceCoolingDownError):
+            stats[name] = {"status": "skipped", "count": 0, "ms": ms}
+        elif task.exception() is not None:
+            logger.warning("Discovery source %s failed: %s", name, task.exception())
+            stats[name] = {"status": "error", "count": 0, "ms": ms}
         else:
-            stats[name] = len(result)
+            result, status = task.result()
+            stats[name] = {"status": status, "count": len(result), "ms": ms}
             papers.extend(result)
     return papers, stats
 
@@ -521,7 +604,7 @@ async def run(
     s = get_settings()
     return_top = return_top or s.discovery_return_top
     papers, stats = await fetch_all_sources(query, page, limit)
-    logger.info("Discovery '%s' page=%d source counts: %s", query, page, stats)
+    logger.info("Discovery '%s' page=%d sources: %s", query, page, stats)
     if not papers:
         logger.error("All discovery sources returned nothing for '%s'", query)
         return []

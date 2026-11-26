@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 import { api } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { Mail, Plus, Loader2, X, Clock, Play, Trash2, Calendar } from 'lucide-react';
@@ -144,14 +144,14 @@ function DigestManagement() {
 
       <AnimatePresence>
         {showCreateForm && (
-          <motion.div
+          <m.div
             className="modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setShowCreateForm(false)}
           >
-            <motion.div
+            <m.div
               className="modal"
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -255,8 +255,8 @@ function DigestManagement() {
                   </button>
                 </div>
               </form>
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         )}
       </AnimatePresence>
 
@@ -296,7 +296,7 @@ function DigestManagement() {
           }}
         >
           {digests.map((digest) => (
-            <motion.div
+            <m.div
               key={digest.id}
               className="card card-hover"
               initial={{ opacity: 0, y: 10 }}
@@ -373,7 +373,7 @@ function DigestManagement() {
                   <Trash2 size={14} />
                 </button>
               </div>
-            </motion.div>
+            </m.div>
           ))}
         </div>
       )}

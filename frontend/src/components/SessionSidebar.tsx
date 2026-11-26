@@ -1,4 +1,4 @@
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { FileText, Clock } from 'lucide-react';
 import type { Session } from '../types/api';
 
@@ -44,7 +44,7 @@ function SessionSidebar({ sessions, currentSessionId, onSelectSession }: Session
       {sessions.map((session) => {
         const isActive = currentSessionId === session.id;
         return (
-          <motion.button
+          <m.button
             key={session.id}
             onClick={() => onSelectSession(session.id)}
             className={`sidebar-item ${isActive ? 'active' : ''}`}
@@ -95,7 +95,7 @@ function SessionSidebar({ sessions, currentSessionId, onSelectSession }: Session
                 <span>{session.paper_count || 0} papers</span>
               </div>
             </div>
-          </motion.button>
+          </m.button>
         );
       })}
     </div>

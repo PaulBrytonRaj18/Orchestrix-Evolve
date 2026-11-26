@@ -319,3 +319,50 @@ export interface TabDefinition {
   label: string;
   icon: React.ElementType;
 }
+
+// ── Background jobs (Server-Sent Events) ──
+
+export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
+
+export interface JobResponse {
+  id: string;
+  session_id: string;
+  kind: 'search' | 'followup';
+  query: string;
+  page: number;
+  status: JobStatus;
+  trace: AgentTrace[];
+  error: string | null;
+  conflict_summary: string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface JobCreate {
+  kind?: 'search' | 'followup';
+  query?: string;
+  page?: number;
+}
+
+/** A ranked paper streamed right after discovery, before it is stored. */
+export interface PaperPreview {
+  id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  abstract: string | null;
+  source_url: string | null;
+  citation_count: number | null;
+  relevance_score: number | null;
+  external_id: string | null;
+  source: string;
+}
+
+export interface JobStreamHandlers {
+  onStatus?: (status: JobStatus) => void;
+  onTrace?: (trace: AgentTrace[]) => void;
+  onPapers?: (papers: PaperPreview[]) => void;
+  onDone: (result: OrchestrateResponse) => void;
+  onError: (message: string) => void;
+}

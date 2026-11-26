@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { motion } from 'framer-motion';
+import { m } from 'framer-motion';
 import { Copy, Check, Link2 } from 'lucide-react';
 import type { Paper, CitationStyle } from '../types/api';
 
@@ -54,7 +54,7 @@ function CitationPanel({ papers }: CitationPanelProps) {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {papers.map((paper) => (
-          <motion.div
+          <m.div
             key={paper.id}
             className="card"
             initial={{ opacity: 0, y: 10 }}
@@ -133,7 +133,7 @@ function CitationPanel({ papers }: CitationPanelProps) {
                 Citation not available in {selectedStyle.toUpperCase()} format
               </p>
             )}
-          </motion.div>
+          </m.div>
         ))}
       </div>
     </div>

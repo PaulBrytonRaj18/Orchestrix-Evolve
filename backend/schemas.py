@@ -352,6 +352,34 @@ class RoadmapQueryResponse(BaseModel):
     orchestration_result: OrchestrateResponse
 
 
+class JobCreate(BaseModel):
+    kind: Literal["search", "followup"] = "search"
+    # Defaults to the session's own query; required for follow-up searches.
+    query: str | None = Field(None, min_length=1, max_length=1000)
+    page: int = Field(0, ge=0, le=20)
+
+    @model_validator(mode="after")
+    def followup_needs_query(self) -> JobCreate:
+        if self.kind == "followup" and not self.query:
+            raise ValueError("A follow-up job needs a query")
+        return self
+
+
+class JobResponse(ORMModel):
+    id: str
+    session_id: str
+    kind: str
+    query: str
+    page: int
+    status: Literal["queued", "running", "completed", "failed"]
+    trace: list[TraceEntry] = Field(default_factory=list)
+    error: str | None = None
+    conflict_summary: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     version: str | None = None

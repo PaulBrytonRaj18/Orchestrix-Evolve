@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "../lib/supabase";
-import type { Session as SupabaseSession } from "@supabase/supabase-js";
+import type { Session as SupabaseSession } from "@supabase/auth-js";
 
 interface AuthUser {
   id: string;

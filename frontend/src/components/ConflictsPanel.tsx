@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { m, AnimatePresence } from 'framer-motion';
 import { api } from '../api';
 import { useToast } from '../contexts/ToastContext';
 import { AlertTriangle, Check, X, Loader2, Shield } from 'lucide-react';
@@ -319,14 +319,14 @@ function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
 
       <AnimatePresence>
         {selectedConflict && (
-          <motion.div
+          <m.div
             className="modal-backdrop"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={() => setSelectedConflict(null)}
           >
-            <motion.div
+            <m.div
               className="modal"
               initial={{ opacity: 0, scale: 0.95, y: 20 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -388,8 +388,8 @@ function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
                   {isResolving ? 'Resolving...' : 'Resolve Conflict'}
                 </button>
               </div>
-            </motion.div>
-          </motion.div>
+            </m.div>
+          </m.div>
         )}
       </AnimatePresence>
     </div>

@@ -72,6 +72,25 @@ class Settings(BaseSettings):
     discovery_timeout: float = 20.0
     discovery_per_source_limit: int = Field(default=50, ge=1, le=100)
     discovery_return_top: int = Field(default=20, ge=1)
+    # Wall-clock budget for one discovery round. Sources still running are cancelled
+    # and the search continues with whatever arrived.
+    discovery_deadline: float = Field(default=8.0, gt=0)
+    # After a source fails (rate limit, outage, deadline) it is skipped for this long
+    # instead of costing every search its retries again. 0 disables the cooldown.
+    source_failure_cooldown_seconds: float = Field(default=60.0, ge=0)
+
+    # ── Source response cache ──────────────────────────────────────────────
+    source_cache_enabled: bool = True
+    source_cache_ttl_seconds: int = Field(default=86_400, ge=0)  # regular searches
+    source_cache_since_ttl_seconds: int = Field(default=3_600, ge=0)  # "new since" digests
+    source_cache_memory_items: int = Field(default=256, ge=0)
+
+    # ── Background jobs ────────────────────────────────────────────────────
+    job_max_concurrency: int = Field(default=4, ge=1)  # running jobs per process
+    job_max_active_per_user: int = Field(default=3, ge=1)
+    job_heartbeat_seconds: float = Field(default=15.0, gt=0)
+    job_stale_after_seconds: float = Field(default=90.0, gt=0)  # no heartbeat → orphaned
+    sse_keepalive_seconds: float = Field(default=15.0, gt=0)
 
     # ── Scheduler ──────────────────────────────────────────────────────────
     # Run the digest scheduler in exactly one process (e.g. one replica or a
