@@ -18,7 +18,9 @@ from models import (
     Summary,
     Synthesis,
     User,
+    Work,
     generate_uuid,
+    work_key_for,
 )
 
 
@@ -66,10 +68,10 @@ class TestSessionModel:
         assert session.user_id == "user-123"
 
 
-class TestPaperModel:
-    def test_paper_creation(self):
-        paper = Paper(
-            session_id="session-123",
+class TestWorkAndPaperModels:
+    def test_work_creation(self):
+        work = Work(
+            work_key="10.1/x",
             title="Test Paper",
             authors=["Author 1", "Author 2"],
             year=2024,
@@ -77,17 +79,23 @@ class TestPaperModel:
             source="arxiv",
             citation_count=100,
         )
-        assert paper.title == "Test Paper"
-        assert paper.authors == ["Author 1", "Author 2"]
-        assert paper.year == 2024
-        assert paper.source == "arxiv"
-        assert paper.citation_count == 100
+        assert work.title == "Test Paper" and work.citation_count == 100
 
-    def test_paper_defaults(self):
-        paper = Paper(session_id="session-123", title="Minimal Paper", source="unknown")
-        assert paper.authors in [[], None]
-        assert paper.year is None
-        assert paper.abstract is None
+    def test_paper_reads_through_to_its_work(self):
+        work = Work(work_key="k", title="Shared", authors=["A"], year=2020, source="arxiv")
+        paper = Paper(session_id="session-123", work=work, relevance_score=0.7)
+        assert (paper.title, paper.authors, paper.year, paper.source) == (
+            "Shared",
+            ["A"],
+            2020,
+            "arxiv",
+        )
+        assert paper.summary is None and paper.citation is None
+
+    def test_work_key_prefers_identifier_then_title(self):
+        assert work_key_for("10.1/abc", "Whatever") == "10.1/abc"
+        a = work_key_for(None, "Deep  Learning!")
+        assert a == work_key_for(None, "deep learning") and a.startswith("title:")
 
 
 class TestAnalysisModel:
@@ -104,7 +112,7 @@ class TestAnalysisModel:
 class TestSummaryModel:
     def test_summary_creation(self):
         summary = Summary(
-            paper_id="paper-123",
+            work_id="work-123",
             abstract_compression="Compressed version",
             key_contributions="Key contributions here",
             methodology="Experimental",
@@ -117,7 +125,7 @@ class TestSummaryModel:
 class TestCitationModel:
     def test_citation_creation(self):
         citation = Citation(
-            paper_id="paper-123",
+            work_id="work-123",
             apa="Author (2024). Title.",
             mla="Author. 'Title.'",
             ieee="A. Author, 'Title,' 2024.",

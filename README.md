@@ -85,7 +85,7 @@ The production image runs `alembic upgrade head` before starting uvicorn.
 
 ```bash
 cd backend
-pytest                                   # 214 tests, SQLite, no network
+pytest                                   # 232 tests, SQLite, no network
 TEST_DATABASE_URL=postgresql://... pytest  # same suite against Postgres
 RUN_LIVE=1 pytest -m live                # contract checks against the real APIs
 ruff check . && ruff format --check .
@@ -271,6 +271,27 @@ score = 0.35 × tfidf_cosine(query, title+abstract)
 
 Citations are log-scaled because counts are heavy-tailed. Ranking runs in a worker thread.
 
+### Semantic ranking (Phase 2)
+Similarity comes from a free local embedding model (`BAAI/bge-small-en-v1.5` via
+fastembed/ONNX, no API key) instead of TF-IDF, blended as semantic 0.3 + citations
+0.6. Model, text length and weights were chosen on a frozen benchmark of 23 topics
+whose ground truth is the papers expert reviews cite — see
+[`backend/evaluation/README.md`](backend/evaluation/README.md):
+
+| Ranker | nDCG@20 | Recall@20 | MRR |
+|---|---|---|---|
+| TF-IDF (before) | 0.394 | 0.460 | 0.547 |
+| bge-small hybrid (now) | **0.549** | **0.578** | **0.728** |
+
+If the model cannot load, ranking falls back to TF-IDF automatically.
+
+### Shared papers, summaries and embeddings
+Each paper is stored once (`works`); a session's papers link to it. Summaries,
+citations and embeddings belong to the work, so a paper summarised in one session is
+reused by every later session (no new LLM call). Summaries that do need the LLM are
+sent 4 papers per request. Embeddings are stored with pgvector on PostgreSQL
+(Supabase: enable the `vector` extension — migration 005 needs it).
+
 ### Discovery performance
 - **Deadline:** each search waits at most `DISCOVERY_DEADLINE` (8 s) for the sources;
   slower ones are cancelled and reported as `timeout`.
@@ -344,6 +365,7 @@ Manages scheduled research digests:
 | POST | /sessions/{id}/roadmap | Rebuild roadmap from stored data |
 | GET | /sessions/{id}/roadmap | Get roadmap |
 | POST | /sessions/{id}/roadmap/query?query=… | Run a suggested query into the session (blocking) |
+| GET | /papers/{id}/related?limit=10 | Papers closest in meaning (pgvector nearest neighbours) |
 
 ### Background jobs (what the SPA uses)
 | Method | Endpoint | Description |

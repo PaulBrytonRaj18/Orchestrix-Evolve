@@ -81,6 +81,11 @@ def init_db() -> None:
     """Create any missing tables. Schema *changes* go through Alembic migrations."""
     import models  # noqa: F401  (registers mappers on Base.metadata)
 
+    if is_postgres():  # works.embedding is a pgvector column
+        from sqlalchemy import text
+
+        with engine.begin() as conn:
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(bind=engine)
 
 

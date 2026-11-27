@@ -15,6 +15,7 @@ import math
 import re
 import time
 from collections import Counter
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -484,36 +485,78 @@ def compute_similarity(title1: str, title2: str) -> float:
     return len(words1 & words2) / len(words1 | words2)
 
 
+@dataclass(frozen=True)
+class RankWeights:
+    """Weights of the ranking features (each feature is in [0, 1])."""
+
+    semantic: float = 0.35
+    keyword: float = 0.20
+    citations: float = 0.25
+    recency: float = 0.10
+    venue: float = 0.10
+
+
+DEFAULT_WEIGHTS = RankWeights()
+
+
+def ranking_features(
+    paper: dict[str, Any], query: str, max_citations: int, min_year: int, max_year: int
+) -> dict[str, float]:
+    """Per-paper features in [0, 1]. ``semantic`` comes from ``paper["semantic_score"]``
+    (TF-IDF or embedding cosine, set beforehand).
+
+    Citations are log-scaled: counts are heavy-tailed, and linear scaling let one
+    landmark paper flatten every other paper's citation score to ~0.
+    """
+    citations = paper.get("citation_count") or 0
+    year = paper.get("year") or min_year
+    query_words = set(tokenize(query))
+    text = set(tokenize(f"{paper.get('title', '')} {paper.get('abstract') or ''}"))
+    return {
+        "semantic": max(0.0, min(paper.get("semantic_score", 0.0), 1.0)),
+        "keyword": len(query_words & text) / len(query_words) if query_words else 0.0,
+        "citations": math.log1p(citations) / math.log1p(max_citations)
+        if max_citations > 0
+        else 0.0,
+        "recency": (year - min_year) / (max_year - min_year) if max_year > min_year else 0.5,
+        "venue": get_venue_quality(paper.get("venue")),
+    }
+
+
+def score_features(features: dict[str, float], weights: RankWeights = DEFAULT_WEIGHTS) -> float:
+    total = sum(getattr(weights, k) for k in features)
+    score = sum(getattr(weights, k) * v for k, v in features.items()) / (total or 1.0)
+    return round(min(max(score, 0.0), 1.0), 4)
+
+
 def compute_relevance_score(
     paper: dict[str, Any],
     query: str,
     max_citations: int,
     min_year: int,
     max_year: int,
+    weights: RankWeights = DEFAULT_WEIGHTS,
 ) -> float:
-    """Weighted blend in [0, 1]: semantic 35%, keyword 20%, citations 25%, recency 10%, venue 10%.
-
-    Citations are log-scaled: counts are heavy-tailed, and linear scaling let one
-    landmark paper flatten every other paper's citation score to ~0.
-    """
-    citations = paper.get("citation_count") or 0
-    citation_score = math.log1p(citations) / math.log1p(max_citations) if max_citations > 0 else 0.0
-
-    year = paper.get("year") or min_year
-    year_score = (year - min_year) / (max_year - min_year) if max_year > min_year else 0.5
-
-    query_words = set(tokenize(query))
-    text = set(tokenize(f"{paper.get('title', '')} {paper.get('abstract') or ''}"))
-    keyword_score = len(query_words & text) / len(query_words) if query_words else 0.0
-
-    score = (
-        0.35 * paper.get("semantic_score", 0.0)
-        + 0.20 * keyword_score
-        + 0.25 * citation_score
-        + 0.10 * year_score
-        + 0.10 * get_venue_quality(paper.get("venue"))
+    """Weighted blend of :func:`ranking_features`, in [0, 1]."""
+    return score_features(
+        ranking_features(paper, query, max_citations, min_year, max_year), weights
     )
-    return round(min(max(score, 0.0), 1.0), 4)
+
+
+def score_pool(
+    query: str, papers: list[dict[str, Any]], weights: RankWeights = DEFAULT_WEIGHTS
+) -> None:
+    """Set ``relevance_score`` on every paper (``semantic_score`` must already be set)."""
+    if not papers:
+        return
+    max_citations = max((p.get("citation_count") or 0) for p in papers)
+    years = [p["year"] for p in papers if p.get("year")]
+    current_year = datetime.now(UTC).year
+    min_year, max_year = (min(years), max(years)) if years else (current_year - 10, current_year)
+    for paper in papers:
+        paper["relevance_score"] = compute_relevance_score(
+            paper, query, max_citations, min_year, max_year, weights
+        )
 
 
 def _merge(primary: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
@@ -577,22 +620,113 @@ def deduplicate_papers(
     return unique
 
 
+# Weights used when the semantic feature comes from embeddings, chosen on the
+# evaluation set (23 topics, expert-cited papers as ground truth; see
+# evaluation/README.md): nDCG@20 0.549 vs 0.394 for the previous TF-IDF ranker.
+# Citations get the larger weight because influential papers are what literature
+# reviews cite; going further (pure citations, 0.567) buys little and buries
+# topical relevance and new work.
+DENSE_WEIGHTS = RankWeights(semantic=0.3, keyword=0.0, citations=0.6, recency=0.0, venue=0.0)
+
+
+def apply_dense_similarity(query: str, papers: list[dict[str, Any]]) -> bool:
+    """Set ``semantic_score`` from embedding cosine similarity (min-max scaled per pool).
+
+    Vectors already stored on shared works are reused; new ones are computed and
+    attached to the paper (``embedding`` / ``embedding_model``) so persistence stores
+    them once. Returns False — leaving TF-IDF to run — when no model is available.
+    """
+    from models import work_key_for
+    from services.embeddings import document_text, get_embedder
+    from services.works import stored_embeddings
+
+    embedder = get_embedder()
+    if embedder is None or not embedder.available:
+        return False
+    try:
+        keys = [work_key_for(p.get("external_id"), p.get("title")) for p in papers]
+        known = stored_embeddings(keys, embedder.model_name)
+        missing = [i for i, k in enumerate(keys) if k not in known]
+        fresh = embedder.embed_documents([document_text(papers[i]) for i in missing])
+        vectors = [None] * len(papers)
+        for i, k in enumerate(keys):
+            if k in known:
+                vectors[i] = known[k]
+        for row, i in enumerate(missing):
+            vectors[i] = fresh[row].tolist()
+        import numpy as np
+
+        matrix = np.asarray(vectors, dtype=np.float32)
+        sims = matrix @ embedder.embed_query(query)
+        lo, hi = float(sims.min()), float(sims.max())
+        scaled = (sims - lo) / (hi - lo) if hi > lo else np.full_like(sims, 0.5)
+    except Exception:
+        logger.exception("Embedding similarity failed; falling back to TF-IDF")
+        return False
+    for paper, score, vec in zip(papers, scaled, vectors, strict=True):
+        paper["semantic_score"] = float(score)
+        paper["embedding"] = vec
+        paper["embedding_model"] = embedder.model_name
+    return True
+
+
 def rank_papers(query: str, papers: list[dict[str, Any]], return_top: int) -> list[dict[str, Any]]:
-    """Pure CPU work: dedupe → similarity → score → sort. Run via ``asyncio.to_thread``."""
+    """Pure CPU work: dedupe → similarity → score → sort. Run via ``asyncio.to_thread``.
+
+    Similarity comes from local embeddings when available, else TF-IDF; each mode
+    uses the weights the evaluation set chose for it.
+    """
     papers = deduplicate_papers(papers)
     if not papers:
         return []
-    papers = compute_semantic_similarity(query, papers)
-    max_citations = max((p.get("citation_count") or 0) for p in papers)
-    years = [p["year"] for p in papers if p.get("year")]
-    current_year = datetime.now(UTC).year
-    min_year, max_year = (min(years), max(years)) if years else (current_year - 10, current_year)
-    for paper in papers:
-        paper["relevance_score"] = compute_relevance_score(
-            paper, query, max_citations, min_year, max_year
-        )
+    if apply_dense_similarity(query, papers):
+        score_pool(query, papers, DENSE_WEIGHTS)
+    else:
+        compute_semantic_similarity(query, papers)
+        score_pool(query, papers)
     papers.sort(key=lambda p: p["relevance_score"], reverse=True)
     return papers[:return_top]
+
+
+async def llm_rerank(query: str, papers: list[dict[str, Any]], top_k: int) -> list[dict[str, Any]]:
+    """Re-score the first ``top_k`` papers with one LLM call; keep the rest as ranked.
+
+    The model rates each paper's relevance 0–10; the final score is the mean of that
+    (scaled to [0, 1]) and the hybrid score. Any failure leaves the order unchanged.
+    """
+    from llm import get_llm
+
+    llm = get_llm()
+    head, tail = papers[:top_k], papers[top_k:]
+    if not llm.enabled or len(head) < 2:
+        return papers
+    listing = "\n".join(
+        f"[{i}] {p.get('title', '')} — {(p.get('abstract') or '')[:300]}"
+        for i, p in enumerate(head, 1)
+    )
+    data = await llm.chat_json(
+        "You rate how relevant research papers are to a search query. Respond with JSON only.",
+        f"Query: {query!r}\n\nPapers:\n{listing}\n\n"
+        'Return {"scores": [{"index": n, "relevance": 0-10}, ...]} covering every paper.',
+        max_tokens=40 * len(head) + 50,
+        temperature=0.0,
+    )
+    scores: dict[int, float] = {}
+    for item in (data or {}).get("scores") or []:
+        try:
+            idx, rel = int(item["index"]), float(item["relevance"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 1 <= idx <= len(head):
+            scores[idx - 1] = max(0.0, min(rel, 10.0)) / 10.0
+    if len(scores) < len(head) // 2:  # too little signal to trust
+        return papers
+    for i, paper in enumerate(head):
+        if i in scores:
+            paper["llm_relevance"] = scores[i]
+            paper["relevance_score"] = round(0.5 * paper["relevance_score"] + 0.5 * scores[i], 4)
+    head.sort(key=lambda p: p["relevance_score"], reverse=True)
+    return head + tail
 
 
 async def run(
@@ -608,4 +742,7 @@ async def run(
     if not papers:
         logger.error("All discovery sources returned nothing for '%s'", query)
         return []
-    return await asyncio.to_thread(rank_papers, query, papers, return_top)
+    ranked = await asyncio.to_thread(rank_papers, query, papers, return_top)
+    if s.llm_rerank_top_k:
+        ranked = await llm_rerank(query, ranked, s.llm_rerank_top_k)
+    return ranked

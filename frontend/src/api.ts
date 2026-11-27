@@ -16,6 +16,7 @@ import type {
   JobResponse,
   JobStatus,
   JobStreamHandlers,
+  RelatedPapersResponse,
 } from './types/api';
 import { supabase } from './lib/supabase';
 
@@ -356,6 +357,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  getRelated: (paperId: string, limit = 5): Promise<RelatedPapersResponse> =>
+    fetchJSON<RelatedPapersResponse>(`/papers/${paperId}/related?limit=${limit}`),
 
   getJob: (jobId: string): Promise<JobResponse> => fetchJSON<JobResponse>(`/jobs/${jobId}`),
 
