@@ -156,6 +156,15 @@ async def plan_workflow(query: str, trace: Trace) -> list[str]:
     return workflow or FULL_WORKFLOW
 
 
+def _describe_summaries(summaries: list[dict]) -> str:
+    reused = sum(1 for s in summaries if s.get("reused"))
+    kinds = {s.get("generated_by") for s in summaries if not s.get("reused")}
+    made = "LLM" if "llm" in kinds else "extractive"
+    if reused == len(summaries):
+        return f"{len(summaries)} summaries (all reused)"
+    return f"{len(summaries)} summaries ({made}" + (f", {reused} reused)" if reused else ")")
+
+
 def _empty_analysis() -> dict[str, list]:
     return {
         "publication_trend": [],
@@ -238,15 +247,7 @@ async def orchestrate(
                 await trace.step(
                     "Summarizer",
                     lambda: summarizer.summarize_all_papers(subset),
-                    lambda r: (
-                        f"{len(r)} summaries ("
-                        + (
-                            "LLM"
-                            if any(s.get("generated_by") == "llm" for s in r)
-                            else "extractive"
-                        )
-                        + ")"
-                    ),
+                    _describe_summaries,
                 )
                 or []
             )

@@ -21,6 +21,8 @@ os.environ.update(
         "ORCHESTRATOR_PLANNER": "static",
         "ENABLE_SCHEDULER": "true",
         "LOG_LEVEL": "WARNING",
+        # No model downloads in tests; tests that need vectors use FakeEmbedder.
+        "EMBEDDINGS_ENABLED": "false",
     }
 )
 
@@ -104,3 +106,42 @@ def client():
         c.current_user = current
         yield c
     app.dependency_overrides.clear()
+
+
+class FakeEmbedder:
+    """Deterministic stand-in for the ONNX model: hashed bag-of-words, L2-normalised."""
+
+    model_name = "fake/bow-64"
+    dim = 64
+    available = True
+
+    def _vec(self, text):
+        import hashlib
+
+        import numpy as np
+
+        v = np.zeros(self.dim, dtype=np.float32)
+        for word in text.lower().split():
+            v[int(hashlib.md5(word.strip(".,:;").encode()).hexdigest(), 16) % self.dim] += 1.0
+        n = np.linalg.norm(v)
+        return v / n if n else v
+
+    def embed_documents(self, texts):
+        import numpy as np
+
+        return np.asarray([self._vec(t) for t in texts], dtype=np.float32).reshape(
+            len(texts), self.dim
+        )
+
+    def embed_query(self, text):
+        return self._vec(text)
+
+
+@pytest.fixture
+def fake_embedder(monkeypatch):
+    from services import embeddings, related
+
+    emb = FakeEmbedder()
+    monkeypatch.setattr(embeddings, "get_embedder", lambda: emb)
+    monkeypatch.setattr(related, "get_embedder", lambda: emb)
+    return emb

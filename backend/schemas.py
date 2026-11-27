@@ -130,7 +130,8 @@ class PaperResponse(PaperBase, ORMModel):
 
 class SummaryResponse(ORMModel):
     id: str
-    paper_id: str
+    work_id: str
+    paper_id: str | None = None  # deprecated: summaries belong to the shared work
     abstract_compression: str | None = None
     key_contributions: str | None = None
     methodology: str | None = None
@@ -141,7 +142,8 @@ class SummaryResponse(ORMModel):
 
 class CitationResponse(ORMModel):
     id: str
-    paper_id: str
+    work_id: str
+    paper_id: str | None = None  # deprecated: citations belong to the shared work
     apa: str | None = Field(None, max_length=4000)
     mla: str | None = Field(None, max_length=4000)
     ieee: str | None = Field(None, max_length=4000)
@@ -378,6 +380,25 @@ class JobResponse(ORMModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+
+
+class RelatedPaper(BaseModel):
+    work_id: str
+    title: str
+    authors: list[str] = Field(default_factory=list)
+    year: int | None = None
+    citation_count: int | None = None
+    source_url: str | None = None
+    external_id: str | None = None
+    similarity: float
+    in_session: bool  # already one of this session's papers
+
+
+class RelatedPapersResponse(BaseModel):
+    paper_id: str
+    available: bool  # false when no embedding model could be loaded
+    model: str | None = None
+    related: list[RelatedPaper] = Field(default_factory=list)
 
 
 class HealthResponse(BaseModel):

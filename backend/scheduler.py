@@ -13,7 +13,7 @@ from sqlalchemy import select
 from agents import citation, summarizer
 from agents.digest_scheduler import calculate_next_run, generate_digest_notification, run_digest
 from database import get_db_context
-from models import DigestRun, Paper, ScheduledDigest
+from models import DigestRun, Paper, ScheduledDigest, Work
 from models import Session as SessionModel
 from services import persistence
 
@@ -111,9 +111,12 @@ def _prepare_run(digest_id: str, run_id: str | None) -> dict | None:
             db.add(run)
             db.flush()
         known = db.scalars(
-            select(Paper.external_id)
+            select(Work.external_id)
+            .join(Paper, Paper.work_id == Work.id)
             .join(SessionModel, Paper.session_id == SessionModel.id)
-            .where(SessionModel.user_id == digest.user_id, SessionModel.query == digest.query)
+            # "Seen" = in any of the user's sessions, not only ones with this exact query.
+            .where(SessionModel.user_id == digest.user_id)
+            .distinct()
         ).all()
         return {
             "run_id": run.id,

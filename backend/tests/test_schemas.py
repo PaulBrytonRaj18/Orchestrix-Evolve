@@ -180,7 +180,7 @@ class TestSummarySchemas:
         now = datetime.now()
         summary = SummaryResponse(
             id="summary-123",
-            paper_id="paper-123",
+            work_id="work-123",
             abstract_compression="Compressed abstract",
             key_contributions="Key contributions",
             methodology="Methodology used",
@@ -193,7 +193,7 @@ class TestSummarySchemas:
     def test_summary_optional_fields(self):
         now = datetime.now()
         summary = SummaryResponse(
-            id="summary-456", paper_id="paper-456", created_at=now, updated_at=now
+            id="summary-456", work_id="work-456", created_at=now, updated_at=now
         )
         assert summary.abstract_compression is None
         assert summary.key_contributions is None
@@ -204,7 +204,7 @@ class TestCitationSchemas:
         now = datetime.now()
         citation = CitationResponse(
             id="citation-123",
-            paper_id="paper-123",
+            work_id="work-123",
             apa="Author (2024). Title.",
             mla="Author. 'Title.'",
             ieee="A. Author, 'Title,' 2024.",

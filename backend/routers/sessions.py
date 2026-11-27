@@ -28,6 +28,7 @@ from schemas import (
     NoteCreate,
     NoteResponse,
     OrchestrateResponse,
+    RelatedPapersResponse,
     RoadmapQueryRequest,
     RoadmapQueryResponse,
     RoadmapResponse,
@@ -37,7 +38,7 @@ from schemas import (
     SynthesisResponse,
     SynthesizeRequest,
 )
-from services import persistence
+from services import persistence, related
 
 router = APIRouter(prefix="/sessions", tags=["Sessions"])
 
@@ -288,6 +289,39 @@ def update_note(
     db.commit()
     db.refresh(note)
     return note
+
+
+@notes_router.get("/{paper_id}/related", response_model=RelatedPapersResponse)
+async def related_papers(
+    paper_id: str,
+    limit: int = Query(10, ge=1, le=50),
+    user_id: str = Depends(get_current_user),
+) -> RelatedPapersResponse:
+    """Papers most similar in meaning to this one (embedding nearest neighbours)."""
+
+    def find() -> RelatedPapersResponse:
+        with get_db_context() as db:
+            paper = db.get(Paper, paper_id)
+            if paper is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Paper not found")
+            get_owned_session(db, paper.session_id, user_id)
+            embedder = related.get_embedder()
+            if embedder is None or not embedder.available:
+                return RelatedPapersResponse(paper_id=paper_id, available=False)
+            neighbours = related.nearest_works(db, paper.work, limit)
+            in_session = set(
+                db.scalars(select(Paper.work_id).where(Paper.session_id == paper.session_id))
+            )
+            return RelatedPapersResponse(
+                paper_id=paper_id,
+                available=True,
+                model=paper.work.embedding_model,
+                related=[
+                    related.related_payload(w, sim, w.id in in_session) for w, sim in neighbours
+                ],
+            )
+
+    return await run_in_threadpool(find)
 
 
 # ─── Synthesis ───────────────────────────────────────────────────────────────

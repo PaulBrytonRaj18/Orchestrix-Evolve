@@ -366,3 +366,24 @@ export interface JobStreamHandlers {
   onDone: (result: OrchestrateResponse) => void;
   onError: (message: string) => void;
 }
+
+// ── Related papers (embedding nearest neighbours) ──
+
+export interface RelatedPaper {
+  work_id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  citation_count: number | null;
+  source_url: string | null;
+  external_id: string | null;
+  similarity: number;
+  in_session: boolean;
+}
+
+export interface RelatedPapersResponse {
+  paper_id: string;
+  available: boolean;
+  model: string | null;
+  related: RelatedPaper[];
+}

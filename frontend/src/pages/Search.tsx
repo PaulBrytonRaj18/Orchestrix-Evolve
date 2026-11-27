@@ -350,6 +350,7 @@ function Search() {
                       <PaperCard
                         paper={paper}
                         onCopyCitation={handleCopyCitation}
+                        canExplore={!isSearching}
                       />
                     </m.div>
                   ))}

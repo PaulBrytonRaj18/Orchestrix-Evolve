@@ -116,7 +116,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:pg16  # Postgres 16 + the vector extension
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: orchestrix_test

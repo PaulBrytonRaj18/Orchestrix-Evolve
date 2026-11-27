@@ -17,6 +17,11 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
+# Bake the embedding model into the image (no download at runtime, works offline).
+ENV EMBEDDING_CACHE_DIR=/opt/models
+RUN mkdir -p /opt/models && python -c "from fastembed import TextEmbedding; \
+TextEmbedding('BAAI/bge-small-en-v1.5', cache_dir='/opt/models')" && chmod -R a+rX /opt/models
+
 COPY --chown=app:app . .
 USER app
 

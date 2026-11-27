@@ -62,6 +62,10 @@ class Settings(BaseSettings):
     # dependency-completed before execution.
     orchestrator_planner: Literal["static", "llm"] = "static"
     summarize_top_n: int = Field(default=10, ge=0)
+    summary_batch_size: int = Field(default=4, ge=1, le=8)  # papers per LLM request
+    # Optional: re-score the top K results with one LLM call (needs GROQ_API_KEY).
+    # 0 disables. The LLM score is blended 50/50 with the measured hybrid score.
+    llm_rerank_top_k: int = Field(default=0, ge=0, le=30)
 
     # ── Discovery sources ──────────────────────────────────────────────────
     semantic_scholar_url: str = "https://api.semanticscholar.org/graph/v1/paper/search"
@@ -78,6 +82,13 @@ class Settings(BaseSettings):
     # After a source fails (rate limit, outage, deadline) it is skipped for this long
     # instead of costing every search its retries again. 0 disables the cooldown.
     source_failure_cooldown_seconds: float = Field(default=60.0, ge=0)
+
+    # ── Embeddings (local, free: fastembed/ONNX) ────────────────────────────
+    embeddings_enabled: bool = True
+    embedding_model: str = "BAAI/bge-small-en-v1.5"  # see services/embeddings.MODELS
+    embedding_cache_dir: str = ""  # model files; empty → fastembed's default cache
+    embedding_threads: int = Field(default=0, ge=0)  # 0 → ONNX Runtime decides
+    embedding_max_chars: int = Field(default=600, ge=100, le=4000)
 
     # ── Source response cache ──────────────────────────────────────────────
     source_cache_enabled: bool = True

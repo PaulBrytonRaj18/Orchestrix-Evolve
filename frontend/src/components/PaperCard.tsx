@@ -1,20 +1,39 @@
 import React, { useState } from 'react';
 import { m, AnimatePresence } from 'framer-motion';
-import { Copy, Check, ExternalLink, BookOpen, X } from 'lucide-react';
-import type { Paper, CitationStyle } from '../types/api';
+import { Copy, Check, ExternalLink, BookOpen, X, Network } from 'lucide-react';
+import { api } from '../api';
+import type { Paper, CitationStyle, RelatedPapersResponse } from '../types/api';
 
 interface PaperCardProps {
   paper: Paper;
   showNotes?: boolean;
   onNoteChange?: (paperId: string, content: string) => void;
   onCopyCitation?: (text: string) => void;
+  /** False while the paper is only a streamed preview (not stored yet). */
+  canExplore?: boolean;
 }
 
-function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCardProps) {
+function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation, canExplore = true }: PaperCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [showCitationModal, setShowCitationModal] = useState(false);
   const [showSummary, setShowSummary] = useState(false);
   const [copiedFormat, setCopiedFormat] = useState<CitationStyle | null>(null);
+  const [related, setRelated] = useState<RelatedPapersResponse | null>(null);
+  const [relatedOpen, setRelatedOpen] = useState(false);
+  const [relatedError, setRelatedError] = useState<string | null>(null);
+
+  const toggleRelated = async (): Promise<void> => {
+    const opening = !relatedOpen;
+    setRelatedOpen(opening);
+    if (opening && !related) {
+      try {
+        setRelatedError(null);
+        setRelated(await api.getRelated(paper.id));
+      } catch (error) {
+        setRelatedError(error instanceof Error ? error.message : 'Could not load related papers');
+      }
+    }
+  };
 
   const formatAuthors = (authors: string[] | undefined | null): string => {
     if (!authors || authors.length === 0) return 'Unknown';
@@ -196,6 +215,15 @@ function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCard
               <BookOpen size={14} />
               {showSummary ? 'Hide' : 'Summary'}
             </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={toggleRelated}
+              disabled={!canExplore}
+              title={canExplore ? 'Papers closest in meaning' : 'Available when the search finishes'}
+            >
+              <Network size={14} />
+              {relatedOpen ? 'Hide related' : 'Related'}
+            </button>
             {paper.source_url && (
               <a
                 href={paper.source_url}
@@ -209,6 +237,41 @@ function PaperCard({ paper, showNotes, onNoteChange, onCopyCitation }: PaperCard
             )}
           </div>
         </div>
+
+        {relatedOpen && (
+          <div className="related-papers" style={{ marginTop: 'var(--space-3)' }}>
+            {relatedError && <p className="text-sm" style={{ color: 'var(--error-primary)' }}>{relatedError}</p>}
+            {!relatedError && !related && <div className="loading-spinner" />}
+            {related && !related.available && (
+              <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+                Related papers are unavailable: the embedding model is not loaded on the server.
+              </p>
+            )}
+            {related?.available && related.related.length === 0 && (
+              <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>No related papers stored yet.</p>
+            )}
+            {related?.available && related.related.length > 0 && (
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 'var(--space-2)' }}>
+                {related.related.map((r) => (
+                  <li key={r.work_id} style={{ fontSize: 'var(--text-sm)', display: 'flex', gap: 'var(--space-2)', alignItems: 'baseline' }}>
+                    <span className="badge" title="Similarity in meaning">{Math.round(r.similarity * 100)}%</span>
+                    <span style={{ flex: 1 }}>
+                      {r.source_url ? (
+                        <a href={r.source_url} target="_blank" rel="noopener noreferrer">{r.title}</a>
+                      ) : (
+                        r.title
+                      )}
+                      <span style={{ color: 'var(--text-tertiary)' }}>
+                        {r.year ? ` · ${r.year}` : ''}
+                        {r.in_session ? ' · in this session' : ''}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
 
         {showNotes && (
           <div

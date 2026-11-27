@@ -130,11 +130,69 @@ async def summarize_paper(paper: dict[str, Any]) -> dict[str, Any]:
     return _normalise(paper, data) if data else extractive_summary(paper)
 
 
+_BATCH_SYSTEM = (
+    "You are a precise research assistant. Summarise each paper using only its own "
+    "title and abstract. Respond with a single JSON object and nothing else."
+)
+
+
+async def _summarize_batch(batch: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Several papers in one LLM request. Items the model omits or garbles fall back
+    to a single-paper request, so a bad batch never loses a summary."""
+    with_abstract = [p for p in batch if p.get("abstract")]
+    results: dict[int, dict[str, Any]] = {}
+    if len(with_abstract) > 1:
+        docs = "\n\n".join(
+            f"[{i}] Title: {p.get('title', 'N/A')}\nAbstract: {(p.get('abstract') or '')[:_ABSTRACT_CHARS]}"
+            for i, p in enumerate(with_abstract, 1)
+        )
+        data = await get_llm().chat_json(
+            _BATCH_SYSTEM,
+            f'{docs}\n\nReturn JSON: {{"summaries": [one object per paper, in order, each with '
+            f'"index" (the [n] number) and exactly these keys: {_SINGLE_SCHEMA}]}}',
+            max_tokens=min(600 * len(with_abstract), 3500),
+        )
+        for item in (data or {}).get("summaries") or []:
+            try:
+                idx = int(item.get("index"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if 1 <= idx <= len(with_abstract) and item.get("abstract_compression"):
+                results[id(with_abstract[idx - 1])] = _normalise(with_abstract[idx - 1], item)
+    missing = [p for p in batch if id(p) not in results]
+    singles = await asyncio.gather(*(summarize_paper(p) for p in missing))
+    for paper, summary in zip(missing, singles, strict=True):
+        results[id(paper)] = summary
+    return [results[id(p)] for p in batch]
+
+
 async def summarize_all_papers(papers: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Summarise papers concurrently (bounded by the shared LLM limiter), preserving order."""
+    """Summarise papers, preserving order.
+
+    * papers whose shared work already has a summary reuse it (no LLM call);
+    * the rest go to the LLM ``SUMMARY_BATCH_SIZE`` papers per request (fewer
+      requests under the provider's rate limit), batches running concurrently;
+    * without an LLM key, extractive summaries.
+    """
     if not papers:
         return []
-    return list(await asyncio.gather(*(summarize_paper(p) for p in papers)))
+    from config import get_settings
+    from services.works import stored_summaries
+
+    reused = await asyncio.to_thread(stored_summaries, papers)
+    todo = [p for p in papers if p.get("id") not in reused]
+    size = get_settings().summary_batch_size
+    if not get_llm().enabled:
+        fresh = [extractive_summary(p) for p in todo]
+    elif size <= 1:
+        fresh = list(await asyncio.gather(*(summarize_paper(p) for p in todo)))
+    else:
+        batches = [todo[i : i + size] for i in range(0, len(todo), size)]
+        fresh = [
+            s for b in await asyncio.gather(*(_summarize_batch(b) for b in batches)) for s in b
+        ]
+    by_paper = {id(p): s for p, s in zip(todo, fresh, strict=True)}
+    return [reused.get(p.get("id")) or by_paper[id(p)] for p in papers]
 
 
 async def synthesize_papers(papers: list[dict[str, Any]]) -> dict[str, Any]:

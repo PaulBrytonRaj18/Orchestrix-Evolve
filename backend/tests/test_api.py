@@ -225,9 +225,17 @@ class TestDigests:
 
         async def recent(query, page=0, limit=None, since=None, sources=discovery.SOURCES):
             assert since is not None  # digests always ask sources for a date window
-            return [make_paper(i, publication_date=today) for i in range(1, 4)] + [old], {}
+            # 1 is already in one of this user's sessions (another test) → not new.
+            fresh = [make_paper(i, publication_date=today) for i in (501, 502, 503)]
+            return fresh + [make_paper(1, publication_date=today), old], {}
 
         monkeypatch.setattr(discovery, "fetch_all_sources", recent)
+        from database import get_db_context
+        from services import persistence
+
+        seen_sid = client.post("/sessions", json={"name": "seen", "query": "x"}).json()["id"]
+        with get_db_context() as db:  # paper 1 is already in another of this user's sessions
+            persistence.save_papers(db, seen_sid, [make_paper(1)])
         r = client.post("/digests", json={"name": "GNN weekly", "query": "gnn drug"})
         assert r.status_code == 201, r.text
         did = r.json()["id"]
@@ -246,7 +254,7 @@ class TestDigests:
         assert status == "completed"
         runs = client.get(f"/digests/{did}").json()["runs"]
         assert len(runs) == 1  # the manual run is not recorded twice
-        # 3 new papers; the stale one the source returned despite the filter is dropped
+        # 3 new papers: the stale one is dropped, and paper 1 was seen in another session
         assert runs[0]["new_papers_count"] == 3 and runs[0]["session_id"]
         digest_session = client.get(f"/sessions/{runs[0]['session_id']}")
         assert digest_session.status_code == 200  # owned by the digest's user

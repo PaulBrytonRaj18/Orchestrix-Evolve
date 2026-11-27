@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from agents import digest_scheduler
 from auth import get_current_user
 from database import get_db, get_db_context
-from models import DigestRun, Paper, ScheduledDigest
+from models import DigestRun, Paper, ScheduledDigest, Work
 from models import Session as SessionModel
 from scheduler import scheduler
 from schemas import (
@@ -147,9 +147,12 @@ async def preview_digest(
         with get_db_context() as db:
             digest = get_owned_digest(db, digest_id, user_id)
             known = db.scalars(
-                select(Paper.external_id)
+                select(Work.external_id)
+                .join(Paper, Paper.work_id == Work.id)
                 .join(SessionModel, Paper.session_id == SessionModel.id)
-                .where(SessionModel.user_id == user_id, SessionModel.query == digest.query)
+                # "Seen" = in any of the user's sessions, not only ones with this exact query.
+                .where(SessionModel.user_id == user_id)
+                .distinct()
             ).all()
             return digest.query, digest.last_run_at, [k for k in known if k]
 

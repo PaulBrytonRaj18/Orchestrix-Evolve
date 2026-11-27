@@ -13,10 +13,10 @@ from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from agents.discovery import normalize_text
-from models import Analysis, Citation, Conflict, Paper, Roadmap, Summary
+from models import Analysis, Citation, Conflict, Paper, Roadmap, Summary, Work, work_key_for
 from models import Session as SessionModel
 from schemas import (
     AnalysisResponse,
@@ -40,7 +40,9 @@ def _paper_query(session_id: str):
         select(Paper)
         .where(Paper.session_id == session_id)
         .options(
-            selectinload(Paper.summary), selectinload(Paper.citation), selectinload(Paper.notes)
+            joinedload(Paper.work).selectinload(Work.summary),
+            joinedload(Paper.work).selectinload(Work.citation),
+            selectinload(Paper.notes),
         )
         .order_by(Paper.relevance_score.desc().nulls_last(), Paper.created_at)
     )
@@ -85,75 +87,107 @@ def _get_or_create(db: Session, model: type, where: dict[str, Any], **values: An
     return row
 
 
+def upsert_work(db: Session, data: dict[str, Any]) -> Work:
+    """Find or create the shared work for a discovered paper and refresh its metadata."""
+    ext = _clip(data.get("external_id"), 500)
+    work = _get_or_create(
+        db,
+        Work,
+        {"work_key": work_key_for(ext, data.get("title"))},
+        title=_clip(data.get("title") or "Untitled", 1000),
+        authors=list(data.get("authors") or [])[:500],
+        year=_valid_year(data.get("year")),
+        abstract=_clip(data.get("abstract"), 10000),
+        source_url=_clip(data.get("source_url"), 2000),
+        citation_count=data.get("citation_count"),
+        external_id=ext,
+        source=_clip(data.get("source") or "unknown", 100),
+        venue=_clip(data.get("venue"), 500),
+    )
+    # A later sighting can only add information: fresher citation counts, missing fields.
+    if (data.get("citation_count") or 0) > (work.citation_count or 0):
+        work.citation_count = data["citation_count"]
+    for field, limit in (("abstract", 10000), ("source_url", 2000), ("venue", 500)):
+        if not getattr(work, field) and data.get(field):
+            setattr(work, field, _clip(data[field], limit))
+    if work.year is None and _valid_year(data.get("year")):
+        work.year = data["year"]
+    if data.get("embedding") is not None and data.get("embedding_model"):
+        work.embedding = list(data["embedding"])
+        work.embedding_model = data["embedding_model"]
+    cit = data.get("citation")
+    if cit and work.citation is None:
+        _get_or_create(
+            db,
+            Citation,
+            {"work_id": work.id},
+            apa=cit.get("apa"),
+            mla=cit.get("mla"),
+            ieee=cit.get("ieee"),
+            chicago=cit.get("chicago"),
+        )
+    return work
+
+
 def save_papers(db: Session, session_id: str, papers: list[dict[str, Any]]) -> dict[str, str]:
-    """Insert new papers (+ citations); return ``{provisional_id: stored_id}``."""
+    """Link discovered papers to the session (creating shared works as needed).
+
+    Returns ``{provisional_id: session_paper_id}``.
+    """
     existing = db.execute(
-        select(Paper.id, Paper.external_id, Paper.title).where(Paper.session_id == session_id)
+        select(Paper.id, Work.id, Work.title)
+        .join(Work, Paper.work_id == Work.id)
+        .where(Paper.session_id == session_id)
     ).all()
-    by_ext = {e: pid for pid, e, _ in existing if e}
+    by_work = {wid: pid for pid, wid, _ in existing}
     by_title = {normalize_text(t): pid for pid, _, t in existing}
 
     id_map: dict[str, str] = {}
     for data in papers:
         provisional = data.get("id")
-        ext = _clip(data.get("external_id"), 500)
-        stored = by_ext.get(ext) if ext else None
-        stored = stored or by_title.get(normalize_text(data.get("title")))
-        if stored:
+        same_title = by_title.get(normalize_text(data.get("title")))
+        work = upsert_work(db, data)
+        stored = by_work.get(work.id) or same_title
+        if stored is None:
+            values = {"relevance_score": data.get("relevance_score")}
             if provisional:
-                id_map[provisional] = stored
-            continue
-
-        paper = Paper(
-            session_id=session_id,
-            title=_clip(data.get("title") or "Untitled", 1000),
-            authors=list(data.get("authors") or [])[:500],
-            year=_valid_year(data.get("year")),
-            abstract=_clip(data.get("abstract"), 10000),
-            source_url=_clip(data.get("source_url"), 2000),
-            citation_count=data.get("citation_count"),
-            relevance_score=data.get("relevance_score"),
-            external_id=ext,
-            source=_clip(data.get("source") or "unknown", 100),
-        )
-        if provisional:
-            paper.id = provisional
-        try:
-            with db.begin_nested():
-                db.add(paper)
-                db.flush()
-        except IntegrityError:
-            # A concurrent run stored this work first (uq_papers_session_external).
-            winner = db.scalar(
-                select(Paper.id).where(Paper.session_id == session_id, Paper.external_id == ext)
+                values["id"] = provisional
+            link = _get_or_create(
+                db, Paper, {"session_id": session_id, "work_id": work.id}, **values
             )
-            if winner is None:
-                raise
-            if provisional:
-                id_map[provisional] = winner
-            continue
-        cit = data.get("citation")
-        if cit:
-            record = _get_or_create(db, Citation, {"paper_id": paper.id})
-            record.apa, record.mla = cit.get("apa"), cit.get("mla")
-            record.ieee, record.chicago = cit.get("ieee"), cit.get("chicago")
-        if ext:
-            by_ext[ext] = paper.id
-        by_title[normalize_text(paper.title)] = paper.id
-        id_map[provisional or paper.id] = paper.id
+            stored = link.id
+            by_work[work.id] = stored
+            by_title[normalize_text(work.title)] = stored
+        if provisional:
+            id_map[provisional] = stored
     return id_map
 
 
+_QUALITY = {"llm": 2, "extractive": 1}
+
+
 def save_summaries(db: Session, summaries: list[dict[str, Any]], id_map: dict[str, str]) -> None:
+    """Attach summaries to the papers' shared works. A summary from the LLM is never
+    replaced by a weaker extractive one."""
+    paper_ids = [id_map[s["paper_id"]] for s in summaries if s.get("paper_id") in id_map]
+    work_of = (
+        dict(db.execute(select(Paper.id, Paper.work_id).where(Paper.id.in_(paper_ids))).all())
+        if paper_ids
+        else {}
+    )
     for data in summaries:
-        paper_id = id_map.get(data.get("paper_id") or "")
-        if not paper_id:
+        work_id = work_of.get(id_map.get(data.get("paper_id") or ""))
+        if not work_id:
             continue
-        summary = _get_or_create(db, Summary, {"paper_id": paper_id})
+        summary = _get_or_create(db, Summary, {"work_id": work_id})
+        new_q = _QUALITY.get(data.get("generated_by") or "llm", 2)
+        if summary.abstract_compression and _QUALITY.get(summary.generated_by or "llm", 2) > new_q:
+            continue
         summary.abstract_compression = data.get("abstract_compression") or None
         summary.key_contributions = data.get("key_contributions") or None
         summary.methodology = data.get("methodology") or None
         summary.limitations = data.get("limitations") or None
+        summary.generated_by = data.get("generated_by") or "llm"
 
 
 def save_roadmap(
@@ -238,9 +272,9 @@ def paper_to_dict(p: Paper) -> dict[str, Any]:
     }
 
 
-def summary_to_dict(s: Summary) -> dict[str, Any]:
+def summary_to_dict(s: Summary, paper_id: str) -> dict[str, Any]:
     return {
-        "paper_id": s.paper_id,
+        "paper_id": paper_id,
         "abstract_compression": s.abstract_compression,
         "key_contributions": s.key_contributions,
         "methodology": s.methodology,
@@ -259,7 +293,7 @@ def session_inputs(db: Session, session_id: str) -> dict[str, Any]:
     conflicts = db.scalars(select(Conflict).where(Conflict.session_id == session_id)).all()
     return {
         "papers": [paper_to_dict(p) for p in papers],
-        "summaries": [summary_to_dict(p.summary) for p in papers if p.summary],
+        "summaries": [summary_to_dict(p.summary, p.id) for p in papers if p.summary],
         "notes": [{"paper_id": n.paper_id, "content": n.content} for p in papers for n in p.notes],
         "analysis": analysis.data_json if analysis else None,
         "conflicts": [
@@ -296,7 +330,11 @@ def build_orchestrate_response(db: Session, session_id: str, result: dict[str, A
             for p in paper_models
             if p.citation
         ],
-        "summaries": [SummaryResponse.model_validate(p.summary) for p in papers if p.summary],
+        "summaries": [
+            SummaryResponse.model_validate(p.summary).model_copy(update={"paper_id": p.id})
+            for p in papers
+            if p.summary
+        ],
         "trace": result.get("trace", []),
         "conflicts": [ConflictResponse.model_validate(c) for c in conflicts],
         "conflict_summary": result.get("conflict_summary"),

@@ -1,3 +1,5 @@
+import hashlib
+import re
 import uuid
 
 from sqlalchemy import (
@@ -11,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    TypeDecorator,
 )
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -63,37 +66,102 @@ class Session(Base):
     jobs = relationship("OrchestrationJob", back_populates="session", cascade="all, delete-orphan")
 
 
-class Paper(Base):
-    __tablename__ = "papers"
+class EmbeddingVector(TypeDecorator):
+    """A float vector: pgvector ``vector`` on PostgreSQL, a JSON list elsewhere."""
+
+    impl = JSON
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            from pgvector.sqlalchemy import Vector
+
+            return dialect.type_descriptor(Vector())
+        return dialect.type_descriptor(JSON())
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        return [float(x) for x in value]
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        return [float(x) for x in value]
+
+
+def work_key_for(external_id: str | None, title: str | None) -> str:
+    """Identity of a work across sessions: its DOI / arXiv id, else a title hash."""
+    if external_id:
+        return external_id[:500]
+    normalised = " ".join(re.findall(r"[a-z0-9]+", (title or "").lower()))
+    return "title:" + hashlib.sha1(normalised.encode()).hexdigest()
+
+
+class Work(Base):
+    """A paper, stored once for every session and user that finds it. Summaries,
+    citations and the embedding hang off the work, so they are computed once."""
+
+    __tablename__ = "works"
+    __table_args__ = (Index("uq_works_work_key", "work_key", unique=True),)
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    work_key = Column(String(600), nullable=False)
     title = Column(String, nullable=False)
     authors = Column(JSON, nullable=False, default=list)
     year = Column(Integer, nullable=True)
     abstract = Column(Text, nullable=True)
     source_url = Column(String, nullable=True)
     citation_count = Column(Integer, nullable=True)
-    relevance_score = Column(Float, nullable=True)
     external_id = Column(String, nullable=True, index=True)
     source = Column(String, nullable=False)
+    venue = Column(String, nullable=True)
+    embedding = Column(EmbeddingVector, nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    summary = relationship(
+        "Summary", back_populates="work", uselist=False, cascade="all, delete-orphan"
+    )
+    citation = relationship(
+        "Citation", back_populates="work", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class Paper(Base):
+    """A work as it appears in one session (with that session's score and notes)."""
+
+    __tablename__ = "papers"
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    work_id = Column(String, ForeignKey("works.id"), nullable=False, index=True)
+    relevance_score = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         Index("idx_papers_session_created", "session_id", "created_at"),
-        # One row per work per session; NULL external ids stay unconstrained.
-        Index("uq_papers_session_external", "session_id", "external_id", unique=True),
+        Index("uq_papers_session_work", "session_id", "work_id", unique=True),
     )
 
     session = relationship("Session", back_populates="papers")
-    summary = relationship(
-        "Summary", back_populates="paper", uselist=False, cascade="all, delete-orphan"
-    )
-    citation = relationship(
-        "Citation", back_populates="paper", uselist=False, cascade="all, delete-orphan"
-    )
+    work = relationship("Work", lazy="joined", innerjoin=True)
     notes = relationship("Note", back_populates="paper", cascade="all, delete-orphan")
+
+    # Read-through to the shared work, so API schemas and agents see a flat paper.
+    title = property(lambda self: self.work.title)
+    authors = property(lambda self: self.work.authors or [])
+    year = property(lambda self: self.work.year)
+    abstract = property(lambda self: self.work.abstract)
+    source_url = property(lambda self: self.work.source_url)
+    citation_count = property(lambda self: self.work.citation_count)
+    external_id = property(lambda self: self.work.external_id)
+    source = property(lambda self: self.work.source)
+    venue = property(lambda self: self.work.venue)
+    summary = property(lambda self: self.work.summary)
+    citation = property(lambda self: self.work.citation)
 
 
 class Analysis(Base):
@@ -116,18 +184,19 @@ class Analysis(Base):
 class Summary(Base):
     __tablename__ = "summaries"
 
-    __table_args__ = (Index("uq_summaries_paper_id", "paper_id", unique=True),)
+    __table_args__ = (Index("uq_summaries_work_id", "work_id", unique=True),)
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
+    work_id = Column(String, ForeignKey("works.id"), nullable=False)
     abstract_compression = Column(Text, nullable=True)
     key_contributions = Column(Text, nullable=True)
     methodology = Column(Text, nullable=True)
     limitations = Column(Text, nullable=True)
+    generated_by = Column(String(20), nullable=True)  # "llm" | "extractive"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    paper = relationship("Paper", back_populates="summary")
+    work = relationship("Work", back_populates="summary")
 
 
 class Synthesis(Base):
@@ -146,10 +215,10 @@ class Synthesis(Base):
 class Citation(Base):
     __tablename__ = "citations"
 
-    __table_args__ = (Index("uq_citations_paper_id", "paper_id", unique=True),)
+    __table_args__ = (Index("uq_citations_work_id", "work_id", unique=True),)
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    paper_id = Column(String, ForeignKey("papers.id"), nullable=False)
+    work_id = Column(String, ForeignKey("works.id"), nullable=False)
     apa = Column(Text, nullable=True)
     mla = Column(Text, nullable=True)
     ieee = Column(Text, nullable=True)
@@ -157,7 +226,7 @@ class Citation(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    paper = relationship("Paper", back_populates="citation")
+    work = relationship("Work", back_populates="citation")
 
 
 class Note(Base):
