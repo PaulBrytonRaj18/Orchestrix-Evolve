@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     # dependency-completed before execution.
     orchestrator_planner: Literal["static", "llm"] = "static"
     summarize_top_n: int = Field(default=10, ge=0)
+    deep_max_rounds: int = Field(default=3, ge=1, le=6)
+    deep_queries_per_round: int = Field(default=2, ge=1, le=4)
+    deep_min_gain: float = Field(default=0.10, ge=0.0, le=1.0)  # stop below this growth
+    qa_max_papers: int = Field(default=15, ge=1, le=60)  # papers indexed per session for Q&A
+    claims_top_n: int = Field(default=12, ge=0)  # papers whose claims are compared
     summary_batch_size: int = Field(default=4, ge=1, le=8)  # papers per LLM request
     # Optional: re-score the top K results with one LLM call (needs GROQ_API_KEY).
     # 0 disables. The LLM score is blended 50/50 with the measured hybrid score.

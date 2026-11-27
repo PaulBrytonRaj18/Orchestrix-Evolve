@@ -227,6 +227,36 @@ function ConflictsPanel({ sessionId }: ConflictsPanelProps) {
                   </p>
                 )}
 
+                {(conflict.evidence_a || conflict.evidence_b || conflict.analysis_insight) && (
+                  <div
+                    className="conflict-evidence"
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+                      gap: 'var(--space-3)',
+                      marginLeft: '44px',
+                      marginBottom: 'var(--space-3)',
+                    }}
+                  >
+                    {[
+                      { claim: conflict.analysis_insight, quote: conflict.evidence_a },
+                      { claim: conflict.summarization_insight, quote: conflict.evidence_b },
+                    ].map((side, i) => (
+                      <div key={i} style={{ fontSize: 'var(--text-sm)', padding: 'var(--space-3)', background: 'var(--bg-secondary)', borderRadius: 'var(--radius-md)' }}>
+                        <div style={{ fontWeight: 'var(--font-medium)', marginBottom: 'var(--space-1)' }}>{side.claim}</div>
+                        {side.quote && (
+                          <blockquote style={{ margin: 0, color: 'var(--text-secondary)', fontStyle: 'italic' }}>“{side.quote}”</blockquote>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {conflict.confidence != null && (
+                  <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-tertiary)', marginLeft: '44px', marginBottom: 'var(--space-3)' }}>
+                    Confidence {Math.round(conflict.confidence * 100)}% · detected by {conflict.detected_by === 'llm' ? 'LLM judge' : 'heuristic'}
+                  </p>
+                )}
+
                 <div style={{ display: 'flex', gap: 'var(--space-2)', marginLeft: '44px' }}>
                   <button
                     className="btn btn-primary btn-sm"

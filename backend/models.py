@@ -118,11 +118,20 @@ class Work(Base):
     venue = Column(String, nullable=True)
     embedding = Column(EmbeddingVector, nullable=True)
     embedding_model = Column(String(100), nullable=True)
+    # Citation graph (OpenAlex): this work's id there and the works it cites.
+    openalex_id = Column(String(40), nullable=True, index=True)
+    references = Column(JSON, nullable=True)
+    references_fetched_at = Column(DateTime(timezone=True), nullable=True)
+    # Question answering: "fulltext" | "abstract" once passages are stored.
+    passages_source = Column(String(20), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     summary = relationship(
         "Summary", back_populates="work", uselist=False, cascade="all, delete-orphan"
+    )
+    claims = relationship(
+        "Claim", back_populates="work", cascade="all, delete-orphan", order_by="Claim.position"
     )
     citation = relationship(
         "Citation", back_populates="work", uselist=False, cascade="all, delete-orphan"
@@ -254,6 +263,13 @@ class Conflict(Base):
     summarization_insight = Column(Text, nullable=True)
     resolved = Column(Boolean, default=False)
     resolution_notes = Column(Text, nullable=True)
+    # Claim-based conflicts: the two papers, their verbatim evidence, and how sure we are.
+    paper_a_id = Column(String, ForeignKey("papers.id", ondelete="SET NULL"), nullable=True)
+    paper_b_id = Column(String, ForeignKey("papers.id", ondelete="SET NULL"), nullable=True)
+    evidence_a = Column(Text, nullable=True)
+    evidence_b = Column(Text, nullable=True)
+    confidence = Column(Float, nullable=True)
+    detected_by = Column(String(20), nullable=True)  # "llm" | "heuristic"
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -367,3 +383,42 @@ class OrchestrationJob(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     session = relationship("Session", back_populates="jobs")
+
+
+class Claim(Base):
+    """A result claim extracted from a work's abstract (shared, extracted once)."""
+
+    __tablename__ = "claims"
+    __table_args__ = (Index("uq_claims_work_position", "work_id", "position", unique=True),)
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    work_id = Column(String, ForeignKey("works.id"), nullable=False)
+    position = Column(Integer, nullable=False)
+    text = Column(Text, nullable=False)
+    subject = Column(String, nullable=True)
+    outcome = Column(String, nullable=True)
+    direction = Column(String(20), nullable=True)
+    dataset = Column(String, nullable=True)
+    metric = Column(String(100), nullable=True)
+    value = Column(Float, nullable=True)
+    evidence = Column(Text, nullable=True)
+    generated_by = Column(String(20), nullable=True)  # "llm" | "heuristic"
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    work = relationship("Work", back_populates="claims")
+
+
+class Chunk(Base):
+    """A passage of a work's text with its embedding (for question answering)."""
+
+    __tablename__ = "chunks"
+    __table_args__ = (Index("uq_chunks_work_position", "work_id", "position", unique=True),)
+
+    id = Column(String, primary_key=True, default=generate_uuid)
+    work_id = Column(String, ForeignKey("works.id", ondelete="CASCADE"), nullable=False)
+    position = Column(Integer, nullable=False)
+    text = Column(Text, nullable=False)
+    source = Column(String(20), nullable=False)  # "fulltext" | "abstract"
+    embedding = Column(EmbeddingVector, nullable=True)
+    embedding_model = Column(String(100), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())

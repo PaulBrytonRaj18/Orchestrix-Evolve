@@ -2,9 +2,10 @@
 
 The agents form a small dependency graph::
 
-    discovery ──┬── analysis ────┐
-                ├── citation      ├── conflict_detector ── roadmap
-                └── summarizer ──┘
+    discovery ──┬── analysis ──────────┐
+                ├── citation            │
+                ├── summarizer          ├── roadmap
+                └── conflict_detector ──┘   (claims → contradictions between papers)
 
 Independent agents in the same stage run concurrently; every agent is isolated, so
 one failing (e.g. the LLM being down) is recorded in the trace and the rest of the
@@ -24,7 +25,8 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from agents import analysis, citation, conflict_detector, discovery, roadmap, summarizer
+from agents import analysis, citation, discovery, roadmap, summarizer
+from agents import claims as claims_agent
 from config import get_settings
 from llm import get_llm
 
@@ -35,7 +37,7 @@ AGENT_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "analysis": ("discovery",),
     "citation": ("discovery",),
     "summarizer": ("discovery",),
-    "conflict_detector": ("analysis", "summarizer"),
+    "conflict_detector": ("discovery",),
     "roadmap": ("discovery",),
 }
 FULL_WORKFLOW = list(AGENT_DEPENDENCIES)
@@ -143,7 +145,7 @@ async def plan_workflow(query: str, trace: Trace) -> list[str]:
             "You are the Manager agent of a research multi-agent system. Choose which agents "
             "to run for the user's query. Agents: discovery (find papers), analysis (trends, "
             "keywords, authors), citation (formatted references), summarizer (per-paper LLM "
-            "summaries), conflict_detector (contradictions between analysis and summaries), "
+            "summaries), conflict_detector (contradicting claims between papers), "
             "roadmap (foundational papers, gaps, next queries). Default to all of them unless "
             'the query clearly needs less. Respond as JSON: {"agents": [..]}',
             f"User query: {query!r}",
@@ -252,32 +254,35 @@ async def orchestrate(
                 or []
             )
 
-        analysis_result, cited, summaries = await asyncio.gather(
-            run_analysis(), run_citations(), run_summaries()
+        async def run_conflicts() -> dict[str, Any] | None:
+            if "conflict_detector" not in workflow:
+                return None
+            if len(papers) < 2:
+                trace.skip("Conflict Detection", "needs at least 2 papers")
+                return None
+            subset = papers[: settings.claims_top_n]
+            return await trace.step(
+                "Conflict Detection",
+                lambda: claims_agent.detect_conflicts(subset),
+                lambda r: (
+                    f"{len(r['conflicts'])} contradicting claim pairs "
+                    f"({r['stats']['pairs_checked']} related pairs checked)"
+                    if r["conflicts"]
+                    else f"No contradictions ({r['stats']['pairs_checked']} related pairs checked)"
+                ),
+            )
+
+        analysis_result, cited, summaries, conflict_result = await asyncio.gather(
+            run_analysis(), run_citations(), run_summaries(), run_conflicts()
         )
         if cited:
             citation_by_id = {p["id"]: p["citation"] for p in cited}
             for paper in papers:
                 paper["citation"] = citation_by_id.get(paper["id"])
 
-        # ── Stage 3: conflict detection ─────────────────────────────────────
-        conflict_result: dict[str, Any] | None = None
-        if "conflict_detector" in workflow:
-            if analysis_result and summaries:
-                conflict_result = await trace.step(
-                    "Conflict Detection",
-                    lambda: conflict_detector.detect_conflicts(papers, analysis_result, summaries),
-                    lambda r: (
-                        f"{len(r['conflicts'])} conflicts detected"
-                        if r["conflicts"]
-                        else "No conflicts detected"
-                    ),
-                )
-            else:
-                trace.skip("Conflict Detection", "requires both analysis and summaries")
         conflicts = (conflict_result or {}).get("conflicts", [])
 
-        # ── Stage 4: roadmap ────────────────────────────────────────────────
+        # ── Stage 3: roadmap ────────────────────────────────────────────────
         roadmap_result = None
         if "roadmap" in workflow:
             if papers:
@@ -307,5 +312,6 @@ async def orchestrate(
         "trace": trace.entries,
         "conflicts": conflicts,
         "conflict_summary": (conflict_result or {}).get("summary", "No conflicts detected"),
+        "claims": (conflict_result or {}).get("claims") or {},
         "roadmap": roadmap_result,
     }

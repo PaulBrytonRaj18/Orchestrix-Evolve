@@ -1,7 +1,7 @@
 from . import (
     analysis,
     citation,
-    conflict_detector,
+    claims,
     digest_scheduler,
     discovery,
     roadmap,
@@ -12,8 +12,8 @@ __all__ = [
     "discovery",
     "analysis",
     "citation",
+    "claims",
     "summarizer",
-    "conflict_detector",
     "digest_scheduler",
     "roadmap",
 ]

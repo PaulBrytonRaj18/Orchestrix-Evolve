@@ -85,7 +85,7 @@ The production image runs `alembic upgrade head` before starting uvicorn.
 
 ```bash
 cd backend
-pytest                                   # 232 tests, SQLite, no network
+pytest                                   # 227 tests, SQLite, no network
 TEST_DATABASE_URL=postgresql://... pytest  # same suite against Postgres
 RUN_LIVE=1 pytest -m live                # contract checks against the real APIs
 ruff check . && ruff format --check .
@@ -292,6 +292,23 @@ reused by every later session (no new LLM call). Summaries that do need the LLM 
 sent 4 papers per request. Embeddings are stored with pgvector on PostgreSQL
 (Supabase: enable the `vector` extension — migration 005 needs it).
 
+### Phase 3: research intelligence
+- **Contradictions between papers** — result claims are extracted from abstracts
+  (LLM, heuristic fallback), related claims from different papers are paired by
+  embedding similarity, and an LLM judge decides contradiction / agreement /
+  unrelated. Each conflict shows both papers' verbatim evidence and a confidence.
+  Validate the judge with `python -m evaluation.claims_eval` (20 labelled pairs;
+  heuristic fallback F1 0.84).
+- **Citation graph** (`GET /sessions/{id}/graph`, Graph tab) — OpenAlex reference
+  lists → who-cites-whom, PageRank, groups that never cite each other, and **key
+  papers you are missing** (cited by several of your papers, not in the session).
+- **Ask your papers** (`POST /sessions/{id}/ask`, Ask tab) — full text from arXiv
+  (also found via OpenAlex for DOI papers) or open-access PDFs, else the abstract;
+  passages are embedded once per paper; answers cite passages as [n].
+- **Deep research** (`{"kind": "deep"}` job, checkbox under the search box) — rounds of
+  follow-up searches chosen by the LLM (or the roadmap) until a round adds <10% new
+  papers or 3 rounds are done.
+
 ### Discovery performance
 - **Deadline:** each search waits at most `DISCOVERY_DEADLINE` (8 s) for the sources;
   slower ones are cancelled and reported as `timeout`.
@@ -329,13 +346,11 @@ Two functions:
 - **synthesize_papers**: Combines multiple papers into a cohesive paragraph identifying common themes, contradictions, and research gaps
 
 ### Agent 5: Conflict Detection Agent
-Detects contradictions between Analysis and Summarization agents:
-- **Semantic Contradiction**: Analysis keywords vs summary content
-- **Methodology Mismatch**: Analysis focus vs paper methodology
-- **Temporal Contradiction**: Emerging topics vs historical references
-- **Citation Impact Contradiction**: High citations vs perceived limitations
-- **Author Dominance Contradiction**: Few authors dominate vs underemphasized contributions
-- **Keyword Mismatch**: Analysis keywords vs summary emphasis
+Finds contradicting findings **between papers**: extracts structured result claims
+(subject, outcome, direction, dataset, metric, verbatim evidence), pairs related claims
+from different papers by embedding similarity, and judges each pair (LLM, with a
+direction-based heuristic fallback). Conflicts carry both papers, both quotes and a
+confidence. Claims are stored per paper and reused across sessions.
 
 ### Agent 6: Roadmap Agent
 Ranks foundational papers by citation impact and velocity, derives gap areas from analysis, summaries and open conflicts, and proposes up to five runnable follow-up queries anchored on the session topic.

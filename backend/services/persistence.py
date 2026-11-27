@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from agents.discovery import normalize_text
-from models import Analysis, Citation, Conflict, Paper, Roadmap, Summary, Work, work_key_for
+from models import Analysis, Citation, Claim, Conflict, Paper, Roadmap, Summary, Work, work_key_for
 from models import Session as SessionModel
 from schemas import (
     AnalysisResponse,
@@ -190,6 +190,54 @@ def save_summaries(db: Session, summaries: list[dict[str, Any]], id_map: dict[st
         summary.generated_by = data.get("generated_by") or "llm"
 
 
+def _stored(paper_id: str | None, id_map: dict[str, str]) -> str | None:
+    """A provisional paper id → its stored session-paper id (stored ids map to themselves)."""
+    if not paper_id:
+        return None
+    return id_map.get(paper_id) or paper_id
+
+
+def save_claims(
+    db: Session, claims: dict[str, list[dict[str, Any]]], id_map: dict[str, str]
+) -> None:
+    """Store claims on the papers' shared works (once per work; LLM beats heuristic)."""
+    paper_ids = [_stored(pid, id_map) for pid in claims]
+    work_of = (
+        dict(db.execute(select(Paper.id, Paper.work_id).where(Paper.id.in_(paper_ids))).all())
+        if paper_ids
+        else {}
+    )
+    for pid, items in claims.items():
+        work_id = work_of.get(_stored(pid, id_map))
+        if not work_id or not items:
+            continue
+        existing = db.scalars(select(Claim).where(Claim.work_id == work_id)).all()
+        if existing and (
+            any(c.generated_by == "llm" for c in existing)
+            or all(i.get("generated_by") != "llm" for i in items)
+        ):
+            continue  # already have claims at least as good
+        for old in existing:
+            db.delete(old)
+        db.flush()
+        for pos, c in enumerate(items):
+            db.add(
+                Claim(
+                    work_id=work_id,
+                    position=pos,
+                    text=c["text"],
+                    subject=c.get("subject"),
+                    outcome=c.get("outcome"),
+                    direction=c.get("direction"),
+                    dataset=c.get("dataset"),
+                    metric=c.get("metric"),
+                    value=c.get("value"),
+                    evidence=c.get("evidence"),
+                    generated_by=c.get("generated_by"),
+                )
+            )
+
+
 def save_roadmap(
     db: Session, session_id: str, roadmap: dict[str, Any], id_map: dict[str, str] | None = None
 ) -> None:
@@ -242,8 +290,17 @@ def save_orchestration(db: Session, session_id: str, result: dict[str, Any]) -> 
                     description=c.get("description"),
                     analysis_insight=c.get("analysis_insight"),
                     summarization_insight=c.get("summarization_insight"),
+                    paper_a_id=_stored(c.get("paper_a_id"), id_map),
+                    paper_b_id=_stored(c.get("paper_b_id"), id_map),
+                    evidence_a=c.get("evidence_a"),
+                    evidence_b=c.get("evidence_b"),
+                    confidence=c.get("confidence"),
+                    detected_by=c.get("detected_by"),
                 )
             )
+
+    if result.get("claims"):
+        save_claims(db, result["claims"], id_map)
 
     if result.get("roadmap"):
         save_roadmap(db, session_id, result["roadmap"], id_map)

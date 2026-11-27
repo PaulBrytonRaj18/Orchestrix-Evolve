@@ -15,16 +15,20 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agents import conflict_detector, roadmap, summarizer
+from agents import claims as claims_agent
+from agents import roadmap, summarizer
 from auth import get_current_user
 from database import get_db, get_db_context
 from models import Conflict, Note, Paper, Roadmap, Synthesis
 from models import Session as SessionModel
 from orchestrator import orchestrate
 from schemas import (
+    AnswerResponse,
+    AskRequest,
     ConflictDetectionResult,
     ConflictResolve,
     ConflictResponse,
+    GraphResponse,
     NoteCreate,
     NoteResponse,
     OrchestrateResponse,
@@ -190,6 +194,32 @@ async def execute_roadmap_query(
     return {"triggered_query": text.strip(), "orchestration_result": view}
 
 
+@router.get("/{session_id}/graph", response_model=GraphResponse, tags=["Graph"])
+async def citation_graph(session_id: str, user_id: str = Depends(get_current_user)) -> dict:
+    """Who-cites-whom among the session's papers, PageRank, missing key papers, clusters.
+
+    The first call fetches reference lists from OpenAlex (stored on the shared works).
+    """
+    from services.graph import session_graph
+
+    return await session_graph(session_id, user_id)
+
+
+@router.post("/{session_id}/ask", response_model=AnswerResponse, tags=["Q&A"])
+async def ask(session_id: str, body: AskRequest, user_id: str = Depends(get_current_user)) -> dict:
+    """Answer a question from the session's papers, citing the passages used.
+
+    The first question downloads and indexes full texts (arXiv) or abstracts, which
+    can take up to a minute; later questions reuse the stored passages.
+    """
+    from services import qa
+
+    try:
+        return await qa.answer(session_id, user_id, body.question.strip())
+    except qa.QAUnavailableError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
 # ─── Conflicts ───────────────────────────────────────────────────────────────
 
 
@@ -243,13 +273,13 @@ async def detect_conflicts(
             return persistence.session_inputs(db, session_id)
 
     inputs = await run_in_threadpool(load)
-    result = await conflict_detector.detect_conflicts(
-        inputs["papers"], inputs["analysis"] or {}, inputs["summaries"]
-    )
+    result = await claims_agent.detect_conflicts(inputs["papers"])
 
     def save() -> list[ConflictResponse]:
         with get_db_context() as db:
-            persistence.save_orchestration(db, session_id, {"conflicts": result["conflicts"]})
+            persistence.save_orchestration(
+                db, session_id, {"conflicts": result["conflicts"], "claims": result["claims"]}
+            )
             db.commit()
             rows = db.scalars(
                 select(Conflict)

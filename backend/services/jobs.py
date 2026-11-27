@@ -177,17 +177,20 @@ class JobManager:
                 )
                 self._publish(live, "status", {"status": "running"})
 
-                result = await orchestrate(
-                    query,
-                    live.session_id,
-                    page=page,
-                    listener=lambda event, data: self._on_event(live, event, data),
-                )
-                if kind == "followup":
-                    result["roadmap"] = None  # the roadmap stays tied to the session's query
-                view = await run_in_threadpool(
-                    persistence.persist_and_view, live.session_id, live.user_id, result
-                )
+                emit = lambda event, data: self._on_event(live, event, data)  # noqa: E731
+                if kind == "deep":
+                    from services import research_loop
+
+                    outcome = await research_loop.run(live.session_id, live.user_id, query, emit)
+                    view = outcome["view"]
+                    result = {"conflict_summary": outcome["conflict_summary"]}
+                else:
+                    result = await orchestrate(query, live.session_id, page=page, listener=emit)
+                    if kind == "followup":
+                        result["roadmap"] = None  # the roadmap stays tied to the session's query
+                    view = await run_in_threadpool(
+                        persistence.persist_and_view, live.session_id, live.user_id, result
+                    )
                 payload = OrchestrateResponse.model_validate(view).model_dump(mode="json")
 
             live.trace = payload["trace"]

@@ -79,3 +79,38 @@ def stored_embeddings(work_keys: list[str], model: str) -> dict[str, list[float]
     except Exception as exc:
         logger.warning("Could not read stored embeddings: %s", exc)
         return {}
+
+
+def stored_claims(papers: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Claims already extracted for these papers' works, keyed by provisional paper id."""
+    from database import get_db_context
+
+    keys = _keys(papers)
+    if not keys:
+        return {}
+    try:
+        with get_db_context() as db:
+            works = db.scalars(
+                select(Work).where(Work.work_key.in_(list(keys))).options(selectinload(Work.claims))
+            ).all()
+            return {
+                keys[w.work_key]: [
+                    {
+                        "text": c.text,
+                        "subject": c.subject,
+                        "outcome": c.outcome,
+                        "direction": c.direction,
+                        "dataset": c.dataset,
+                        "metric": c.metric,
+                        "value": c.value,
+                        "evidence": c.evidence,
+                        "generated_by": c.generated_by,
+                    }
+                    for c in w.claims
+                ]
+                for w in works
+                if w.claims
+            }
+    except Exception as exc:
+        logger.warning("Could not read stored claims: %s", exc)
+        return {}

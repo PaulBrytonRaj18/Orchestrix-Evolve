@@ -139,9 +139,9 @@ class FakeEmbedder:
 
 @pytest.fixture
 def fake_embedder(monkeypatch):
-    from services import embeddings, related
+    from services import embeddings, qa, related
 
     emb = FakeEmbedder()
-    monkeypatch.setattr(embeddings, "get_embedder", lambda: emb)
-    monkeypatch.setattr(related, "get_embedder", lambda: emb)
+    for module in (embeddings, related, qa):
+        monkeypatch.setattr(module, "get_embedder", lambda: emb)
     return emb

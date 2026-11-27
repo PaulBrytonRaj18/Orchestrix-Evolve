@@ -13,9 +13,12 @@ class TestResolveWorkflow:
     def test_adds_missing_dependencies_in_order(self):
         assert orchestrator.resolve_workflow(["conflict_detector"]) == [
             "discovery",
-            "analysis",
-            "summarizer",
             "conflict_detector",
+        ]
+        assert orchestrator.resolve_workflow(["roadmap", "analysis"]) == [
+            "discovery",
+            "analysis",
+            "roadmap",
         ]
 
     def test_ignores_unknown_agents(self):
@@ -35,7 +38,8 @@ async def test_agent_failure_is_isolated(fake_sources, monkeypatch):
     status = {t["agent"]: t["status"] for t in result["trace"]}
     assert status["Summarizer"] == "error"
     assert status["Citation"] == "done" and status["Analysis"] == "done"
-    assert status["Conflict Detection"] == "skipped"
+    # Claim-based conflict detection no longer depends on the summarizer.
+    assert status["Conflict Detection"] == "done"
     assert status["Roadmap"] == "done"
     assert len(result["papers"]) == 12
     assert all(

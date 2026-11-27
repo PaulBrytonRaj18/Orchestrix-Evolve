@@ -187,6 +187,12 @@ export interface ConflictResponse {
   description: string | null;
   analysis_insight: string | null;
   summarization_insight: string | null;
+  paper_a_id?: string | null;
+  paper_b_id?: string | null;
+  evidence_a?: string | null;
+  evidence_b?: string | null;
+  confidence?: number | null;
+  detected_by?: string | null;
   resolved: boolean;
   resolution_notes: string | null;
   created_at: string;
@@ -327,7 +333,7 @@ export type JobStatus = 'queued' | 'running' | 'completed' | 'failed';
 export interface JobResponse {
   id: string;
   session_id: string;
-  kind: 'search' | 'followup';
+  kind: 'search' | 'followup' | 'deep';
   query: string;
   page: number;
   status: JobStatus;
@@ -340,7 +346,7 @@ export interface JobResponse {
 }
 
 export interface JobCreate {
-  kind?: 'search' | 'followup';
+  kind?: 'search' | 'followup' | 'deep';
   query?: string;
   page?: number;
 }
@@ -386,4 +392,55 @@ export interface RelatedPapersResponse {
   available: boolean;
   model: string | null;
   related: RelatedPaper[];
+}
+
+// ── Citation graph ──
+
+export interface GraphNode {
+  id: string;
+  title: string;
+  year: number | null;
+  citation_count: number | null;
+  pagerank: number;
+  cited_by_in_session: number;
+  has_references: boolean;
+}
+
+export interface MissingKeyPaper {
+  openalex_id: string;
+  title?: string;
+  year?: number | null;
+  citation_count?: number | null;
+  doi?: string | null;
+  authors?: string[];
+  cited_by_session_papers: number;
+}
+
+export interface GraphResponse {
+  nodes: GraphNode[];
+  edges: Array<{ source: string; target: string }>;
+  foundational: Array<{ paper_id: string; title: string; pagerank: number; cited_by_in_session: number }>;
+  missing_key_papers: MissingKeyPaper[];
+  disconnected_clusters: Array<{ cluster: number; size: number; anchor_paper_id: string; anchor_title: string }>;
+  coverage: { papers: number; with_references: number; edges: number };
+}
+
+// ── Questions over papers ──
+
+export interface AnswerPassage {
+  n: number;
+  paper_id: string;
+  title: string;
+  text: string;
+  source: 'fulltext' | 'abstract';
+  similarity: number;
+  cited: boolean;
+}
+
+export interface AnswerResponse {
+  question: string;
+  answer: string;
+  mode: 'llm' | 'extractive' | 'none';
+  passages: AnswerPassage[];
+  coverage: { papers: number; fulltext: number; abstract_only: number };
 }

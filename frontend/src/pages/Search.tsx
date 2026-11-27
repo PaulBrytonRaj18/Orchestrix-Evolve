@@ -8,7 +8,7 @@ import CitationPanel from '../components/CitationPanel'
 import SummaryPanel from '../components/SummaryPanel'
 import ConflictsPanel from '../components/ConflictsPanel'
 import RoadmapPanel from '../components/RoadmapPanel'
-import { Search as SearchIcon, FileText, BarChart3, Link2, Sparkles, AlertTriangle, Map, Loader2, ArrowRight } from 'lucide-react'
+import { Search as SearchIcon, FileText, BarChart3, Link2, Sparkles, AlertTriangle, Map, Loader2, ArrowRight, Network, MessageSquare } from 'lucide-react'
 import type {
   AgentTrace,
   PaperWithDetails,
@@ -21,6 +21,8 @@ import type {
 
 // recharts (~100 kB gzipped) loads only when the Analysis tab is opened.
 const AnalysisCharts = lazy(() => import('../components/AnalysisCharts'))
+const CitationGraph = lazy(() => import('../components/CitationGraph'))
+const AskPanel = lazy(() => import('../components/AskPanel'))
 
 /** Streamed previews have no stored metadata yet; give them the shape the cards expect. */
 function previewToPaper(p: PaperPreview, sessionId: string): PaperWithDetails {
@@ -65,6 +67,7 @@ function Search() {
   const [analysis, setAnalysis] = useState<AnalysisData | null>(null)
   const [roadmap, setRoadmap] = useState<RoadmapResponse | null>(null)
   const [activeTab, setActiveTab] = useState<string>('papers')
+  const [deep, setDeep] = useState(false)
   const streamRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -120,7 +123,7 @@ function Search() {
     try {
       const session = await api.createSession(sessionName, query)
       setCurrentSessionId(session.id)
-      await runJob(session.id)
+      await runJob(session.id, deep ? { kind: 'deep' } : {})
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Search failed', 'error')
     } finally {
@@ -176,7 +179,9 @@ function Search() {
     { id: 'citations', label: 'Citations', icon: Link2 },
     { id: 'summary', label: 'Summary', icon: Sparkles },
     { id: 'conflicts', label: 'Conflicts', icon: AlertTriangle },
-    { id: 'roadmap', label: 'Roadmap', icon: Map }
+    { id: 'roadmap', label: 'Roadmap', icon: Map },
+    { id: 'graph', label: 'Graph', icon: Network },
+    { id: 'ask', label: 'Ask', icon: MessageSquare }
   ]
 
   const suggestions: string[] = [
@@ -237,6 +242,13 @@ function Search() {
             </div>
           </div>
         </form>
+        <label
+          style={{ display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)', marginTop: 'var(--space-3)', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}
+          title="Searches in rounds, following up on what it finds, until new rounds stop adding papers"
+        >
+          <input type="checkbox" checked={deep} onChange={(e) => setDeep(e.target.checked)} disabled={isSearching} />
+          Deep research (several rounds of follow-up searches)
+        </label>
 
         {/* Suggestions */}
         {!isSearching && papers.length === 0 && (
@@ -360,6 +372,16 @@ function Search() {
               {activeTab === 'citations' && <CitationPanel papers={papers} />}
               {activeTab === 'summary' && <SummaryPanel papers={papers} onSynthesize={handleSynthesize} />}
               {activeTab === 'conflicts' && currentSessionId && <ConflictsPanel sessionId={currentSessionId} />}
+              {activeTab === 'ask' && currentSessionId && !isSearching && (
+                <Suspense fallback={<div className="loading-spinner" />}>
+                  <AskPanel sessionId={currentSessionId} />
+                </Suspense>
+              )}
+              {activeTab === 'graph' && currentSessionId && !isSearching && (
+                <Suspense fallback={<div className="loading-spinner" />}>
+                  <CitationGraph sessionId={currentSessionId} onSearch={handleRoadmapQueryClick} />
+                </Suspense>
+              )}
               {activeTab === 'roadmap' && currentSessionId && (
                 <RoadmapPanel
                   roadmap={roadmap}

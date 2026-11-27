@@ -217,6 +217,12 @@ class ConflictResponse(ORMModel):
     summarization_insight: str | None = None
     resolved: bool
     resolution_notes: str | None = None
+    paper_a_id: str | None = None
+    paper_b_id: str | None = None
+    evidence_a: str | None = None
+    evidence_b: str | None = None
+    confidence: float | None = None
+    detected_by: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -355,7 +361,8 @@ class RoadmapQueryResponse(BaseModel):
 
 
 class JobCreate(BaseModel):
-    kind: Literal["search", "followup"] = "search"
+    # search: one full run · followup: add a query's papers · deep: research loop
+    kind: Literal["search", "followup", "deep"] = "search"
     # Defaults to the session's own query; required for follow-up searches.
     query: str | None = Field(None, min_length=1, max_length=1000)
     page: int = Field(0, ge=0, le=20)
@@ -399,6 +406,37 @@ class RelatedPapersResponse(BaseModel):
     available: bool  # false when no embedding model could be loaded
     model: str | None = None
     related: list[RelatedPaper] = Field(default_factory=list)
+
+
+class GraphResponse(BaseModel):
+    nodes: list[dict[str, Any]]
+    edges: list[dict[str, str]]
+    foundational: list[dict[str, Any]]
+    missing_key_papers: list[dict[str, Any]]
+    disconnected_clusters: list[dict[str, Any]]
+    coverage: dict[str, int]
+
+
+class AskRequest(BaseModel):
+    question: str = Field(..., min_length=3, max_length=1000)
+
+
+class AnswerPassage(BaseModel):
+    n: int
+    paper_id: str
+    title: str
+    text: str
+    source: Literal["fulltext", "abstract"]
+    similarity: float
+    cited: bool = False
+
+
+class AnswerResponse(BaseModel):
+    question: str
+    answer: str
+    mode: Literal["llm", "extractive", "none"]
+    passages: list[AnswerPassage]
+    coverage: dict[str, int]
 
 
 class HealthResponse(BaseModel):

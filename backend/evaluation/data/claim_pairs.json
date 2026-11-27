@@ -1,0 +1,25 @@
+{
+  "description": "Hand-written claim pairs for validating the contradiction judge. label: contradiction | not (agreement or unrelated, including different numbers from different methods).",
+  "pairs": [
+    {"a": "Adding dropout to the transformer improves translation BLEU on WMT14 En-De.", "b": "Dropout does not improve BLEU of the transformer on WMT14 En-De.", "label": "contradiction"},
+    {"a": "Vitamin D supplementation reduced the incidence of respiratory infections in adults.", "b": "Vitamin D supplementation had no effect on respiratory infection rates in adults.", "label": "contradiction"},
+    {"a": "Graph neural networks outperform fingerprint-based random forests on molecular property prediction.", "b": "Fingerprint-based random forests outperform graph neural networks on molecular property prediction benchmarks.", "label": "contradiction"},
+    {"a": "Larger batch sizes degrade the generalization of deep networks.", "b": "Increasing batch size does not hurt generalization when the learning rate is scaled accordingly.", "label": "contradiction"},
+    {"a": "Pretraining on ImageNet improves accuracy on medical image segmentation.", "b": "ImageNet pretraining provides no benefit for medical image segmentation accuracy.", "label": "contradiction"},
+    {"a": "Remote work increased individual software developer productivity.", "b": "Remote work decreased software developer productivity.", "label": "contradiction"},
+    {"a": "Chain-of-thought prompting improves arithmetic reasoning accuracy of large language models.", "b": "Chain-of-thought prompting does not improve arithmetic reasoning in large language models.", "label": "contradiction"},
+    {"a": "Data augmentation increases robustness of image classifiers to adversarial examples.", "b": "Data augmentation reduces adversarial robustness of image classifiers.", "label": "contradiction"},
+    {"a": "Federated learning matches centralized training accuracy on non-IID data.", "b": "Federated learning loses substantial accuracy compared with centralized training on non-IID data.", "label": "contradiction"},
+    {"a": "Low-dose aspirin lowers the risk of cardiovascular events in older adults without prior disease.", "b": "Low-dose aspirin did not reduce cardiovascular events in healthy older adults.", "label": "contradiction"},
+    {"a": "Our model achieves 92.1% accuracy on CIFAR-10.", "b": "A ResNet-50 baseline achieves 95.3% accuracy on CIFAR-10.", "label": "not"},
+    {"a": "Graph neural networks improve molecular property prediction.", "b": "Message-passing neural networks achieve strong results on molecular property prediction.", "label": "not"},
+    {"a": "Dropout improves BLEU for small translation models.", "b": "Weight decay improves BLEU for small translation models.", "label": "not"},
+    {"a": "Vitamin D supplementation reduced respiratory infections in children.", "b": "Vitamin C supplementation had no effect on cardiovascular mortality.", "label": "not"},
+    {"a": "Self-supervised pretraining improves segmentation with few labels.", "b": "Self-supervised pretraining improves segmentation when labelled data are scarce.", "label": "not"},
+    {"a": "The proposed optimizer converges faster than Adam on ImageNet.", "b": "The proposed tokenizer reduces sequence length on code datasets.", "label": "not"},
+    {"a": "Quantum kernels outperform classical kernels on a synthetic dataset designed for quantum advantage.", "b": "On standard classical datasets, classical kernels match or exceed quantum kernels.", "label": "not"},
+    {"a": "Model accuracy increases with training data size.", "b": "More training data led to higher accuracy across all model sizes.", "label": "not"},
+    {"a": "The intervention reduced hospital readmissions in heart-failure patients.", "b": "The intervention reduced emergency visits in asthma patients.", "label": "not"},
+    {"a": "Spiking neural networks reduce energy consumption on neuromorphic hardware.", "b": "Spiking neural networks lower inference energy on Loihi neuromorphic chips.", "label": "not"}
+  ]
+}
